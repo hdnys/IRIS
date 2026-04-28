@@ -8,7 +8,7 @@ Students: **[To be assigned]**
 
 ### Abstract
 
-## Description 
+## Description
 
 ## Project Objectives
 
@@ -19,14 +19,38 @@ Students: **[To be assigned]**
 ## Checklist
 
 - [ ] Clone the created repository offline;
-- [ ]  Add your name and surname to the Readme file and your teammates as collaborators
+- [ ] Add your name and surname to the Readme file and your teammates as collaborators
 - [ ] Complete the field above after the project is approved
-- [ ]  Make any changes to your repository according to the specific assignment;
-- [ ]  Ensure code reproducibility and instructions on how to replicate the results;
-- [ ]  Add an open-source license, e.g., Apache 2.0;
+- [ ] Make any changes to your repository according to the specific assignment;
+- [ ] Ensure code reproducibility and instructions on how to replicate the results;
+- [ ] Add an open-source license, e.g., Apache 2.0;
 
+## Description of the project
 
+Iris is a software first hardware agnostic tool for people with vision defects, the goal is to take advantage of local open source artificial intelligence models and more specific tools for facial recognition, object deteciton, detection of emotions, ect... The architecture should be as agnostic to the models as possible. The video stream will be received as frames by an orchestrator, this orchestrator will first receive frames from the video, after running lightweight similarity checks with the last frame received, if the frame is deemed different enough it will be passed on to the rest of the program. The program follows a common data pool archetecture where a non relational database, a json with static fields and dynamic fields is modified by each model (with interfaces for simpler models) to build a coherent context. The pipeline is the following, a VLM receives the frame and access the old json context, it either modifies the context or creates a new one depending on how different it is. Then based on the new static fields the orchestrator calls on the respective models such as object detection and categorization, facial recognition. Each of of the models outputs a json that we then use to augment the context. After finalizing the context, that same VLM now acting as an LLM takes in the context and types out a description to the user based on the context and a system prompt that distinguishes different types of blindness.
 
-## Description of the project 
+Module layout
 
-Iris is a software first hardware agnostic tool for people with vision defects, the goal is to take advantage of local open source artificial intelligence models and more specific tools for facial recognition, object deteciton, detection of emotions, ect... The architecture should be as agnostic to the models as possible. The video stream will be received as frames by an orchestrator, this orchestrator will first receive frames from the video, after running lightweight similarity checks with the last frame received, if the frame is deemed different enough it will be passed on to the rest of the program. The program follows a common data pool archetecture where a non relational database, a json with static fields and dynamic fields is modified by each model (with interfaces for simpler models) to build a coherent context. The pipeline is the following, a VLM receives the frame and access the old json context, it either modifies the context or creates a new one depending on how different it is. Then based on the new static fields the orchestrator calls on the respective models such as object detection and categorization, facial recognition. Each of of the models outputs a json that we then use to augment the context. After finalizing the context, that same VLM now acting as an LLM takes in the context and types out a description to the user based on the context and a system prompt that distinguishes different types of blindness.  
+iris/
+├── core/
+│ ├── pool.py # DataPool: jsonschema-validated, frame_id-versioned, lock-protected
+│ ├── orchestrator.py # Pipeline state machine
+│ ├── registry.py # Plugin discovery (entry_points or scan ./adapters)
+│ └── events.py # tiny pub/sub for "frame_ready", "static_updated", "dynamic_complete"
+├── capture/
+│ ├── source.py # FrameSource ABC: opencv, file, RTSP
+│ └── similarity.py # phash + hamming threshold; returns is_different(frame)
+├── adapters/ # one file per model — drop-in plugins
+│ ├── base.py # ModelAdapter ABC
+│ ├── vlm_smolvlm.py # also has llm_mode() for the second pass
+│ ├── vlm_phi35.py # interchangeable
+│ ├── objdet_yolo_onnx.py
+│ ├── face_facerec.py # wraps your existing face_recognition code
+│ ├── emotion_fer.py
+│ ├── ocr_paddle.py
+│ └── depth_midas.py
+├── output/
+│ └── tts.py # wraps pyttsx3 today, Piper later — same say(text, lang) interface
+├── config/
+│ └── iris.yaml # which adapter for each role + thresholds + model paths
+└── main.py
