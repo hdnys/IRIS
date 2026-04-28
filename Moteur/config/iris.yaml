@@ -1,0 +1,26 @@
+adapters:
+  vlm:
+    module: Moteur.adapters.vlm_stub
+    class: VLMStub
+    params: {}
+  object_detection:
+    module: Moteur.adapters.objdet_stub
+    class: ObjDetStub
+    params: {}
+  face_recognition:
+    module: Moteur.adapters.face_stub
+    class: FaceStub
+    params: {}
+  # emotion_detection / ocr / depth_estimation: add adapter modules and the
+  # orchestrator will pick them up automatically when the VLM sets their
+  # corresponding run_* flag.
+
+pipeline:
+  max_workers: 4
+  similarity_threshold: 6   # phash hamming distance — used by the future capture layer
+
+user_profile:
+  vision_profile: low_vision
+  preferred_language: fr-FR
+  verbosity: standard
+  known_people: []
