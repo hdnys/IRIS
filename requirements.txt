@@ -1,0 +1,42 @@
+# ── Core pipeline ────────────────────────────────────────────────────────────
+numpy
+PyYAML
+jsonschema
+
+# ── Vision / capture ─────────────────────────────────────────────────────────
+# Use opencv-python if you need the GUI windows (cv2.imshow); use
+# opencv-python-headless on a server / headless environment.
+opencv-python
+
+# ── Face recognition ─────────────────────────────────────────────────────────
+# Requires CMake + a C++ compiler (on Windows: Visual Studio Build Tools).
+# Install dlib first if the wheel isn't pre-built for your Python version:
+#   pip install dlib   (or grab a .whl from https://github.com/z-mahmud22/Dlib_Windows_Python3.x)
+face-recognition
+
+# ── Text-to-speech ───────────────────────────────────────────────────────────
+pyttsx3
+
+# ── VLM adapter: Ollama / Gemma (active default) ─────────────────────────────
+# No extra Python deps — the adapter uses stdlib urllib only.
+# Requires the Ollama daemon running externally:
+#   https://ollama.com/download
+#   ollama pull gemma3:4b
+#   ollama pull gemma3:1b
+
+# ── VLM adapter: local HuggingFace (vlm_local.py, opt-in) ───────────────────
+# Uncomment to use Moondream2 + Qwen2.5-1.5B-Instruct directly in-process.
+# torch must be installed with the correct CUDA index for your driver; see
+# https://pytorch.org/get-started/locally/ for the right --index-url.
+# Example (CUDA 12.x):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# torch
+# transformers
+# accelerate
+# Pillow
+#
+# Optional: int8 quantization (halves VRAM, ~10-20% latency cost).
+# bitsandbytes may require extra steps on Windows — see:
+#   https://github.com/bitsandbytes-foundation/bitsandbytes
+# bitsandbytes
