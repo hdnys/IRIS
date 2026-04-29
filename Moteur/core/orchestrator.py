@@ -136,9 +136,21 @@ class Orchestrator:
             self.events.emit("vlm_static_error", str(e))
             return False
 
+        # The VLM may include a free-form ``scene_description`` alongside the
+        # orchestration flags. That belongs in the dynamic block (it's a model
+        # output, not an orchestration field), so peel it off here before
+        # update_static merges the rest.
+        scene_desc = ""
+        if isinstance(static_partial, dict):
+            scene_desc = static_partial.pop("scene_description", "") or ""
+
         # Write the VLM's partial dict on top of the existing static fields.
         # This call may also reset the pool if is_new_scene is true.
         self.pool.update_static(static_partial, frame_id, ts)
+        # Now that the pool's frame_id is set to ``frame_id``, update_dynamic
+        # will accept this write (it gates on matching frame_id).
+        if scene_desc:
+            self.pool.update_dynamic("scene_description", scene_desc, frame_id)
         self.pool.update_meta("vlm_static", type(vlm).__name__,
                               (time.time() - t0) * 1000.0, "ok",
                               version=getattr(vlm, "version", ""))

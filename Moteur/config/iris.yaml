@@ -1,8 +1,26 @@
 adapters:
   vlm:
-    module: Moteur.adapters.vlm_stub
-    class: VLMStub
-    params: {}
+    module: Moteur.adapters.vlm_gemma3_ollama
+    class:  Gemma3OllamaVLM
+    params:
+      model:           gemma3:4b
+      model_describe:  gemma3:1b
+      host:  http://127.0.0.1:11434
+      keep_alive: 30m
+      timeout_s: 120
+      max_image_side: 896
+      num_ctx: 2048
+      num_predict_static: 400
+      num_predict_describe: null   # null = derive from user_profile.verbosity
+    # Local HuggingFace alternative (no Ollama required):
+    #   module: Moteur.adapters.vlm_local
+    #   class:  LocalVLM
+    #   params:
+    #     vision_model_id:   vikhyatk/moondream2
+    #     vision_revision:   "2025-04-14"
+    #     narrator_model_id: Qwen/Qwen2.5-1.5B-Instruct
+    #     device: cuda
+    #     dtype: float16
   object_detection:
     module: Moteur.adapters.objdet_stub
     class: ObjDetStub
