@@ -1,6 +1,6 @@
-"""Two-model VLM adapter served by a local Ollama daemon.
+"""Generic two-model VLM adapter served by a local Ollama daemon.
 
-Architecture (post-refactor — simplified for latency):
+Architecture:
 
 * ``mode="static"``  — sends the frame to a fast multimodal model and returns
   a free-form scene description string (1–2 sentences). No JSON, no run_*
@@ -26,8 +26,8 @@ Pull both tags once::
 YAML wiring::
 
     vlm:
-      module: Moteur.adapters.vlm_gemma3_ollama
-      class:  Gemma3OllamaVLM
+      module: Moteur.adapters.vlm_ollama
+      class:  OllamaVLM
       params:
         model:           moondream
         model_describe:  gemma3:1b
@@ -45,9 +45,7 @@ For extra latency / VRAM savings, set these on the **Ollama server**
     OLLAMA_FLASH_ATTENTION=1
     OLLAMA_KV_CACHE_TYPE=q8_0
 
-The class name is historical (the adapter started as Gemma-only). It's
-generic Ollama now — any multimodal tag for ``model`` and any text tag
-for ``model_describe`` will work.
+Any multimodal tag works for ``model`` and any text tag for ``model_describe``.
 """
 from __future__ import annotations
 
@@ -118,7 +116,7 @@ VERBOSITY_NUM_PREDICT = {
 SCENE_DESC_MAX_CHARS = 600
 
 
-class Gemma3OllamaVLM(ModelAdapter):
+class OllamaVLM(ModelAdapter):
     """Multimodal scene-description model + small text narrator, both via Ollama."""
 
     version = "ollama-scene-narrator-0.3"

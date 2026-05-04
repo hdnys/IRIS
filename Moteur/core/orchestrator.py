@@ -136,7 +136,7 @@ class Orchestrator:
         """Run the VLM in static mode and route its string output to the pool.
 
         The static mode now returns just a scene-description string (see
-        ``Moteur.adapters.vlm_gemma3_ollama``). We write it to
+        ``Moteur.adapters.vlm_ollama``). We write it to
         ``dynamic.scene_description`` so it sits alongside every other
         adapter's output and the narrator can read it the same way it reads
         anything else. Same boundary semantics as ``_run_adapter``: must NOT

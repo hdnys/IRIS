@@ -1,7 +1,7 @@
 adapters:
   vlm:
-    module: Moteur.adapters.vlm_gemma3_ollama
-    class:  Gemma3OllamaVLM
+    module: Moteur.adapters.vlm_ollama
+    class:  OllamaVLM
     params:
       model:           moondream      # multimodal — writes scene description
       model_describe:  gemma3:1b      # text-only narrator
