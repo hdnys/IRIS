@@ -10,6 +10,7 @@ adapters:
       timeout_s: 120
       max_image_side: 512             # moondream's vision tower is ~378px
       num_ctx: 2048
+      temperature: 0.3                # mild variation, not chaotic
       num_predict_static: 120         # ~50-token descriptions; 120 is headroom
       num_predict_describe: null      # null = derive from user_profile.verbosity
     # Local HuggingFace alternative (no Ollama required):
@@ -26,16 +27,26 @@ adapters:
     class: ObjDetStub
     params: {}
   face_recognition:
-    module: Moteur.adapters.face_stub
-    class: FaceStub
-    params: {}
+    module: Moteur.adapters.face_sface
+    class:  SFaceAdapter
+    params:
+      yunet_path:    models/face_detection_yunet_2023mar.onnx
+      sface_path:    models/face_recognition_sface_2021dec.onnx
+      gallery_dir:   data
+      cos_threshold: 0.3   # tuned by Mohamed — lower = stricter
+      det_confidence: 0.6
+      det_nms:        0.3
+      top_k:          5000
   # emotion_detection / ocr / depth_estimation: add adapter modules and the
   # orchestrator will pick them up automatically when the VLM sets their
   # corresponding run_* flag.
 
 pipeline:
   max_workers: 4
-  similarity_threshold: 6   # phash hamming distance — used by the future capture layer
+  # dHash hamming distance threshold (out of 256 bits). 25 ≈ 10% of bits
+  # flipped — comfortably above webcam sensor noise, well below "scene
+  # changed". Lower = more frequent re-inference; higher = lazier.
+  similarity_threshold: 25
 
 user_profile:
   vision_profile: total_blindness

@@ -100,15 +100,15 @@ PROFILE_GUIDANCE = {
 }
 
 VERBOSITY_GUIDANCE = {
-    "minimal": "One short sentence. Only the most important fact.",
-    "standard": "Two to three sentences. Focus on what matters now.",
-    "detailed": "Up to five sentences. Include relevant context.",
+    "minimal": "ONE clause, max 8 words. Only the single most important fact.",
+    "standard": "ONE sentence, max 18 words. Direct and factual.",
+    "detailed": "Up to two sentences, 35 words total max. No filler.",
 }
 
 VERBOSITY_NUM_PREDICT = {
-    "minimal": 60,
-    "standard": 160,
-    "detailed": 350,
+    "minimal": 25,
+    "standard": 50,
+    "detailed": 110,
 }
 
 # Cap on raw scene_description length — defends the narrator's prompt from
@@ -131,7 +131,7 @@ class OllamaVLM(ModelAdapter):
         keep_alive: str = "30m",
         timeout_s: float = 120.0,
         max_image_side: int = 512,
-        temperature: float = 0.2,
+        temperature: float = 0.3,
         num_ctx: int = 2048,
         num_predict_static: int = 120,
         num_predict_describe: Optional[int] = None,
@@ -161,6 +161,19 @@ class OllamaVLM(ModelAdapter):
         # Describe ceiling: None means "derive from the user's verbosity
         # setting at call time"; an integer forces an explicit cap.
         self.num_predict_describe = num_predict_describe
+
+        # ---- Cross-frame memory for change-aware narration -----------------
+        # The narrator describes a moving scene to a user who can't see — what
+        # they actually need to hear is *what changed* ("Elie just left",
+        # "someone walked in"), not a re-description of state they already
+        # have. We keep a tiny state machine of who/what was visible at the
+        # last describe call and surface the diff in the next prompt.
+        #
+        # Lives for the whole session. The orchestrator runs only one
+        # describe call at a time, so no locking is required.
+        self._prev_recognized: set[str] = set()
+        self._prev_unknown_count: int = 0
+        self._prev_described: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -252,35 +265,129 @@ class OllamaVLM(ModelAdapter):
         verbosity = profile.get("verbosity", "standard")
         language = profile.get("preferred_language", "en-US")
 
+        # System prompt — kept short on purpose. gemma3:1b can only reliably
+        # hold a handful of instructions; long bullet lists get partly ignored.
+        # Few-shot examples anchor behaviour far more reliably than verbal
+        # rules. The CHANGES examples train the model to lead with diffs
+        # ("Elie just left") rather than re-describing static state.
         system = (
-            f"You are IRIS, speaking aloud to a user.\n"
-            f"User profile: {PROFILE_GUIDANCE.get(vision, PROFILE_GUIDANCE['low_vision'])}\n"
-            f"Verbosity: {VERBOSITY_GUIDANCE.get(verbosity, VERBOSITY_GUIDANCE['standard'])}\n"
-            f"Reply in {language}. Speak in second person ('you see…', 'in front of you…'). "
-            f"If the scene mentions a hazard, lead with it. Do not list raw fields; "
-            f"speak naturally. Output the description text only — no preamble, no JSON."
+            f"You are IRIS, narrating a moving camera frame to a blind user.\n"
+            f"Length: {VERBOSITY_GUIDANCE.get(verbosity, VERBOSITY_GUIDANCE['standard'])}\n"
+            f"Language: {language}. Second person ('you'). No greetings, no advice.\n"
+            "Use exact names from 'Recognized people'. Never invent names. "
+            "Anyone else is 'someone' or 'a person'.\n"
+            "If 'Changes since last narration' is provided, lead with the change — "
+            "the user already heard the previous state.\n\n"
+            "Examples:\n"
+            "  Changes: Mohamad just appeared           → 'Mohamad has just stepped in front of you.'\n"
+            "  Changes: Elie left the view              → 'Elie is no longer in front of you.'\n"
+            "  Changes: Mohamad in, Elie out            → 'Elie has left and Mohamad is now in front of you.'\n"
+            "  Changes: 1 unrecognized person appeared  → 'Someone has just walked up to you.'\n"
+            "  No changes, Recognized: Mohamad          → 'Mohamad is still in front of you.'\n"
+            "  No changes, no people                    → 'A chair sits ahead on your right.'"
         )
 
-        # Lead with the multimodal model's scene_description (the only thing
-        # in the snapshot that resembles "looking at the frame" from the
-        # narrator's POV); detector outputs are supporting evidence.
         dyn = dict(snap.get("dynamic", {}))
         scene_desc = (dyn.pop("scene_description", "") or "").strip()
+        faces = dyn.pop("face_recognition", []) or []
 
+        recognized_list = [
+            f.get("person_id", "") for f in faces
+            if isinstance(f, dict)
+            and f.get("person_id")
+            and f["person_id"] != "Unknown"
+        ]
+        recognized = sorted(set(recognized_list))   # de-dupe + stable order
+        unknown_count = sum(
+            1 for f in faces
+            if isinstance(f, dict) and f.get("person_id") == "Unknown"
+        )
+
+        # ---- Diff against the previous narration ---------------------------
+        # Capture is_first BEFORE _prev_described is updated below so the
+        # cue branch can tell "first frame of session" from "scene unchanged".
+        is_first = not self._prev_described
+        if not is_first:
+            appeared = sorted(set(recognized) - self._prev_recognized)
+            departed = sorted(self._prev_recognized - set(recognized))
+            unknown_delta = unknown_count - self._prev_unknown_count
+        else:
+            # First call of the session — there is no "previous" frame to
+            # diff against. Treat everything as the initial state.
+            appeared = []
+            departed = []
+            unknown_delta = 0
+
+        change_lines: list[str] = []
+        for name in appeared:
+            change_lines.append(f"{name} just entered the view.")
+        for name in departed:
+            change_lines.append(f"{name} is no longer in view.")
+        if unknown_delta > 0:
+            noun = "person" if unknown_delta == 1 else "people"
+            change_lines.append(
+                f"{unknown_delta} unrecognized {noun} just appeared."
+            )
+        elif unknown_delta < 0:
+            n = -unknown_delta
+            noun = "person" if n == 1 else "people"
+            change_lines.append(f"{n} unrecognized {noun} left the view.")
+
+        # Build the user prompt with the most attention-worthy content LAST.
+        # Small models weight the freshest prompt content most heavily, so
+        # the change diff (when present) sits right next to the generation
+        # cue; otherwise the recognized-name list does.
         sections: list[str] = []
         if scene_desc:
-            sections.append(f"What the camera sees:\n{scene_desc}")
-        else:
-            sections.append("What the camera sees: (no scene description available)")
-
+            sections.append(f"Scene: {scene_desc}")
         if dyn:
             sections.append(
-                "Detector outputs (objects, faces, text, ...):\n"
+                "Other detections: "
                 f"{json.dumps(dyn, ensure_ascii=False, default=str)}"
             )
 
-        sections.append("Write the description now.")
+        if recognized:
+            sections.append("People currently in view: " + ", ".join(recognized))
+        if unknown_count and not recognized:
+            sections.append(f"Unrecognized people in view: {unknown_count}")
+        elif unknown_count:
+            sections.append(f"Plus {unknown_count} unrecognized.")
+
+        if change_lines:
+            sections.append(
+                "Changes since last narration:\n"
+                + "\n".join(f"- {c}" for c in change_lines)
+            )
+            cue_names = sorted(set(appeared + departed))
+            if cue_names:
+                sections.append(
+                    "Now narrate the change above in ONE short sentence. "
+                    f"You MUST mention {', '.join(cue_names)} by name."
+                )
+            else:
+                sections.append(
+                    "Now narrate the change above in ONE short sentence:"
+                )
+        elif recognized:
+            preamble = (
+                "" if is_first
+                else "Nothing has changed since the last narration. "
+            )
+            sections.append(
+                f"{preamble}Now narrate the current scene in ONE short sentence. "
+                f"You MUST mention {', '.join(recognized)} by name."
+            )
+        else:
+            sections.append("Now narrate the scene in ONE short sentence:")
+
         prompt = "\n\n".join(sections)
+
+        # Save state for the next describe call. Done BEFORE the HTTP call
+        # so a transient Ollama failure doesn't leave us re-announcing the
+        # same diff next frame.
+        self._prev_recognized = set(recognized)
+        self._prev_unknown_count = unknown_count
+        self._prev_described = True
 
         # Cap describe length: explicit override > verbosity preset.
         max_tokens = (
@@ -311,7 +418,26 @@ class OllamaVLM(ModelAdapter):
             return None
 
         text = (resp.get("response") or "").strip()
-        return text or None
+        if not text:
+            return None
+
+        # Safety net: small models sometimes drop the most important names
+        # despite the prompt. Prepend the missing piece — a stilted line is
+        # still better than a narration that silently omits a person event.
+        # Departed names take priority because they're the most surprising
+        # for the user to miss ("wait, where did Elie go?").
+        prefixes: list[str] = []
+        lower = text.lower()
+        for name in departed:
+            if name.lower() not in lower:
+                prefixes.append(f"{name} is no longer in front of you.")
+        for name in recognized:
+            if name.lower() not in lower:
+                prefixes.append(f"{name} is in front of you.")
+        if prefixes:
+            text = " ".join(prefixes) + " " + text
+
+        return text
 
     # ------------------------------------------------------------------
     # Frame encoding
