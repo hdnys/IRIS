@@ -3,15 +3,15 @@ adapters:
     module: Moteur.adapters.vlm_gemma3_ollama
     class:  Gemma3OllamaVLM
     params:
-      model:           gemma3:4b
-      model_describe:  gemma3:1b
+      model:           moondream      # multimodal — writes scene description
+      model_describe:  gemma3:1b      # text-only narrator
       host:  http://127.0.0.1:11434
       keep_alive: 30m
       timeout_s: 120
-      max_image_side: 896
+      max_image_side: 512             # moondream's vision tower is ~378px
       num_ctx: 2048
-      num_predict_static: 400
-      num_predict_describe: null   # null = derive from user_profile.verbosity
+      num_predict_static: 120         # ~50-token descriptions; 120 is headroom
+      num_predict_describe: null      # null = derive from user_profile.verbosity
     # Local HuggingFace alternative (no Ollama required):
     #   module: Moteur.adapters.vlm_local
     #   class:  LocalVLM
@@ -38,7 +38,7 @@ pipeline:
   similarity_threshold: 6   # phash hamming distance — used by the future capture layer
 
 user_profile:
-  vision_profile: low_vision
-  preferred_language: fr-FR
+  vision_profile: total_blindness
+  preferred_language: en-US
   verbosity: standard
   known_people: []

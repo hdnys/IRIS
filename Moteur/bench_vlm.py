@@ -146,16 +146,20 @@ def main() -> None:
         "model_meta": {},
     }
 
-    # ---- Run N iterations of static + describe -------------------------------
+    # ---- Run N iterations of scene + describe --------------------------------
+    # The static pass now returns a single scene-description string (no JSON).
+    # We do not benchmark the orchestrator's parallel fan-out here — the bench
+    # measures the two VLM calls in isolation so the cold/warm transition is
+    # easy to read. End-to-end timing lives in run_pipeline.py.
     for i in range(1, args.runs + 1):
         print(f"\n=== Run {i}/{args.runs} ===")
 
-        # Static pass
+        # Scene-description pass (vision)
         sampler = VRAMSampler(gpu_index=args.gpu)
         sampler.start()
         t0 = time.perf_counter()
         try:
-            static_out = vlm.run(frame, snap, mode="static")
+            scene_desc = vlm.run(frame, snap, mode="static")
         finally:
             peak = sampler.stop()
         elapsed = time.perf_counter() - t0
@@ -163,30 +167,32 @@ def main() -> None:
             f"{peak} MiB ({peak - baseline:+d} vs baseline)"
             if (peak is not None and baseline is not None) else (f"{peak} MiB" if peak else "n/a")
         )
-        print(f"  static  : {elapsed * 1000:6.0f} ms   |   VRAM peak: {peak_str}")
+        print(f"  scene   : {elapsed * 1000:6.0f} ms   |   VRAM peak: {peak_str}")
         if i == 1:
-            print(f"  static output: {json.dumps(static_out, indent=2)}")
+            print(f"  scene_description: {scene_desc!r}")
 
-        # Mirror the orchestrator: route ``scene_description`` from the static
-        # return to dynamic.scene_description so the describe pass picks it up.
-        static_for_pool = dict(static_out)
-        scene_desc = static_for_pool.pop("scene_description", "")
-
+        # Mirror the new orchestrator: stamp a frame and write the scene
+        # description into ``dynamic`` so the narrator pass sees it the same
+        # way it would in production.
         snap["static"] = {
             "frame_id": f"bench-{i}",
             "timestamp": time.time() * 1000.0,
-            **static_for_pool,
         }
-        # Inject a couple of fake dynamic entries plus the scene description.
         snap["dynamic"] = {
-            "scene_description": scene_desc,
+            "scene_description": scene_desc if isinstance(scene_desc, str) else "",
+            # A couple of fake detector outputs so the narrator has material
+            # beyond the scene description.
             "objects": [{"label": "chair", "confidence": 0.9}],
             "faces": [],
         }
-        if i == 1 and scene_desc:
-            print(f"  scene_description: {scene_desc}")
 
-        # Describe pass
+        # Debug dump: this is exactly what the narrator pass will see.
+        print("  --- pool snapshot (narrator input) ---")
+        dump = json.dumps(snap, indent=2, ensure_ascii=False, default=str)
+        print("\n".join("    " + line for line in dump.splitlines()))
+        print("  --------------------------------------")
+
+        # Narrator pass (text-only)
         sampler = VRAMSampler(gpu_index=args.gpu)
         sampler.start()
         t0 = time.perf_counter()
@@ -199,7 +205,7 @@ def main() -> None:
             f"{peak} MiB ({peak - baseline:+d} vs baseline)"
             if (peak is not None and baseline is not None) else (f"{peak} MiB" if peak else "n/a")
         )
-        print(f"  describe: {elapsed * 1000:6.0f} ms   |   VRAM peak: {peak_str}")
+        print(f"  narrate : {elapsed * 1000:6.0f} ms   |   VRAM peak: {peak_str}")
         if i == 1:
             print(f"  description: {description}")
 

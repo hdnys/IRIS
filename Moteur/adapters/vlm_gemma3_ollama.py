@@ -1,23 +1,26 @@
-"""Two-model Gemma adapter served by a local Ollama daemon.
+"""Two-model VLM adapter served by a local Ollama daemon.
 
-Each VLM pass uses the model that fits its actual job:
+Architecture (post-refactor — simplified for latency):
 
-* ``mode="static"``   — needs vision and structured output. Default model:
-  ``gemma3:4b`` (multimodal, ~3.4 GB Q4_K_M). Ollama's JSON-mode forces
-  parseable output.
-* ``mode="describe"`` — text-in / text-out: the DataPool already carries every
-  dynamic adapter's output, so the describe pass does NOT see the image.
-  Default model: ``gemma3:1b`` (text-only, ~0.7 GB) — much faster per token
-  and no vision tower to load.
+* ``mode="static"``  — sends the frame to a fast multimodal model and returns
+  a free-form scene description string (1–2 sentences). No JSON, no run_*
+  flags, no orchestration metadata. The orchestrator routes the string into
+  ``dynamic.scene_description`` so it lands alongside every other adapter's
+  output. Default model: ``moondream`` (~1.9 B params, built for fast VQA).
 
-Why split? On a single 12B VLM, the static pass is ~3.5 s and describe ~1.1 s
-on a mid-range GPU. With the 4B/1B split, expect ~0.7–1.1 s static and
-~0.15–0.3 s describe at <5 GB combined VRAM, with quality acceptable for
-this task (static is mostly classification; describe is short narration).
+* ``mode="describe"`` — text-only narration pass. Reads the assembled pool
+  (scene description + detector outputs) and emits the user-facing string.
+  Does not see the image. Default model: ``gemma3:1b`` (~0.7 GB).
+
+Why this shape: in the previous design the static pass produced a 14-field
+JSON of orchestration flags. Generating those tokens cost ~2 s of latency
+per frame, and the flags themselves only gated stub adapters. We dropped
+the flags, dropped JSON mode, and now the static pass is a single short
+description (~50 generated tokens, ~250–500 ms warm).
 
 Pull both tags once::
 
-    ollama pull gemma3:4b
+    ollama pull moondream
     ollama pull gemma3:1b
 
 YAML wiring::
@@ -26,25 +29,25 @@ YAML wiring::
       module: Moteur.adapters.vlm_gemma3_ollama
       class:  Gemma3OllamaVLM
       params:
-        model:           gemma3:4b   # static (multimodal)
-        model_describe:  gemma3:1b   # describe (text-only); null = reuse model
+        model:           moondream
+        model_describe:  gemma3:1b
         host:  http://127.0.0.1:11434
         keep_alive: 30m
         timeout_s: 120
-        max_image_side: 896
-        num_ctx: 2048                # small — pool feeds full prompt each call
-        num_predict_static: 200
-        num_predict_describe: null   # null = derive from user_profile.verbosity
+        max_image_side: 512
+        num_ctx: 2048
+        num_predict_static: 120       # ~50-token descriptions; 120 is headroom
+        num_predict_describe: null    # null = derive from user_profile.verbosity
 
-If describe quality with gemma3:1b feels too shallow, swap in a stronger
-small text LLM (still well under 400 ms): ``qwen2.5:1.5b``, ``llama3.2:3b``,
-``phi3.5``.
-
-For extra latency / VRAM savings, also set these on the **Ollama server**
+For extra latency / VRAM savings, set these on the **Ollama server**
 (env vars, before ``ollama serve``)::
 
-    OLLAMA_FLASH_ATTENTION=1   # faster prefill, smaller KV
-    OLLAMA_KV_CACHE_TYPE=q8_0  # near-lossless KV-cache quantization
+    OLLAMA_FLASH_ATTENTION=1
+    OLLAMA_KV_CACHE_TYPE=q8_0
+
+The class name is historical (the adapter started as Gemma-only). It's
+generic Ollama now — any multimodal tag for ``model`` and any text tag
+for ``model_describe`` will work.
 """
 from __future__ import annotations
 
@@ -63,82 +66,18 @@ from Moteur.adapters.base import ModelAdapter
 log = logging.getLogger(__name__)
 
 
-# Schema-aligned defaults. Used when the model returns malformed JSON or a
-# field is missing — keeps the pipeline moving instead of dropping the frame.
-STATIC_DEFAULTS: dict[str, Any] = {
-    "is_new_scene": False,
-    "scene_type": "unknown",
-    "lighting_condition": "unknown",
-    "motion_level": "unknown",
-    "run_object_detection": True,
-    "run_face_recognition": False,
-    "run_emotion_detection": False,
-    "run_ocr": False,
-    "run_depth_estimation": False,
-    "people_present": False,
-    "people_count": 0,
-    "text_visible": False,
-    "hazard_detected": False,
-    "priority_context": "general",
-    # Free-form scene description written by the multimodal model. Routed into
-    # dynamic.scene_description by the orchestrator so the (text-only)
-    # describe pass has actual visual content to work from.
-    "scene_description": "",
-}
-
-# Cap on scene_description length to keep the describe-pass prompt bounded
-# even if the model ignores the "1-2 sentences" instruction.
-SCENE_DESC_MAX_CHARS = 600
-
-# Allowed enum values, mirrored from schema.json. Anything outside these sets is
-# coerced back to "unknown" / "general" so jsonschema validation never fails on
-# a creative model output.
-ENUMS = {
-    "scene_type": {"indoor", "outdoor", "vehicle", "unknown"},
-    "lighting_condition": {"bright", "normal", "dim", "dark", "unknown"},
-    "motion_level": {"still", "slow", "fast", "unknown"},
-    "priority_context": {"navigation", "social", "reading", "general"},
-}
-
-STATIC_SYSTEM = (
-    "You are the visual scene analyzer for IRIS, an assistive vision system "
-    "for blind and low-vision users. Examine the image and return a JSON "
-    "object describing the scene. Set run_* flags true ONLY when that "
-    "downstream analysis would meaningfully help the user (e.g. run_ocr only "
-    "if there is readable text, run_face_recognition only if faces are "
-    "visible). Decide is_new_scene by comparing against the previous context "
-    "you are given — flip it true on a clear change of place or activity. "
-    "Also write a short factual scene_description (1–2 sentences) covering "
-    "what is visible: people and what they appear to be doing, key objects, "
-    "spatial layout (left/right/center/foreground), and any hazards. This "
-    "description is the primary source for the downstream narrator, so be "
-    "concrete and avoid filler — no opinions, no advice, no greetings."
+# Single short prompt — Moondream and Gemma both follow plain English better
+# than schema-style instructions for this kind of task.
+SCENE_PROMPT = (
+    "Describe what you see in 1-2 short factual sentences. "
+    "Mention people (count and what they appear to be doing), key objects, "
+    "spatial layout (left/right/center/foreground), and "
+    "(steps, traffic, obstacles). Do not give advice. Do not greet. "
+    "Output only the description."
 )
 
-STATIC_USER_TEMPLATE = (
-    "Previous static context (may be empty on first frame):\n{previous}\n\n"
-    "Return ONLY a JSON object with EXACTLY these keys:\n"
-    "  is_new_scene (bool)\n"
-    "  scene_type (one of: indoor, outdoor, vehicle, unknown)\n"
-    "  lighting_condition (one of: bright, normal, dim, dark, unknown)\n"
-    "  motion_level (one of: still, slow, fast, unknown)\n"
-    "  run_object_detection (bool)\n"
-    "  run_face_recognition (bool)\n"
-    "  run_emotion_detection (bool)\n"
-    "  run_ocr (bool)\n"
-    "  run_depth_estimation (bool)\n"
-    "  people_present (bool)\n"
-    "  people_count (non-negative integer)\n"
-    "  text_visible (bool)\n"
-    "  hazard_detected (bool)\n"
-    "  priority_context (one of: navigation, social, reading, general)\n"
-    "  scene_description (string, 1–2 plain sentences, factual: people, "
-    "objects, spatial layout, hazards. No advice, no greetings.)"
-)
 
-# Per-profile guidance baked into the describe-pass system prompt. Keeps the
-# adapter the single owner of "what does each vision profile expect" so we can
-# tune phrasing without touching the orchestrator.
+# Per-profile and verbosity guidance for the narrator pass.
 PROFILE_GUIDANCE = {
     "total_blindness": (
         "User cannot see. Be spatially explicit (left/right/ahead/distance). "
@@ -168,70 +107,61 @@ VERBOSITY_GUIDANCE = {
     "detailed": "Up to five sentences. Include relevant context.",
 }
 
-# Hard ceilings on generated tokens per verbosity. Without these, the model
-# tends to keep elaborating well past the requested length, costing latency
-# for output the user will never hear. Sized with ~25% headroom over the
-# token count of a well-behaved response at each level.
 VERBOSITY_NUM_PREDICT = {
     "minimal": 60,
     "standard": 160,
     "detailed": 350,
 }
 
+# Cap on raw scene_description length — defends the narrator's prompt from
+# a runaway VLM that ignores the "1-2 sentences" instruction.
+SCENE_DESC_MAX_CHARS = 600
+
 
 class Gemma3OllamaVLM(ModelAdapter):
-    """Two-model Gemma adapter served by a local Ollama HTTP endpoint.
+    """Multimodal scene-description model + small text narrator, both via Ollama."""
 
-    Static and describe passes use independent model tags so each can be sized
-    for its job. The static pass needs vision and structured output → small
-    multimodal model. The describe pass is text-in/text-out (the DataPool
-    already carries every dynamic adapter's result) → small text-only LLM,
-    no vision tower to load. With ``model="gemma3:4b"`` and
-    ``model_describe="gemma3:1b"`` both fit in <5 GB VRAM together.
-    """
-
-    version = "gemma3-ollama-split-0.2"
-    writes = ["static.*", "dynamic.vlm_description"]
+    version = "ollama-scene-narrator-0.3"
+    writes = ["dynamic.scene_description", "dynamic.vlm_description"]
 
     def __init__(
         self,
         role: str,
-        model: str = "gemma3:4b",
+        model: str = "moondream",
         model_describe: Optional[str] = "gemma3:1b",
         host: str = "http://127.0.0.1:11434",
         keep_alive: str = "30m",
         timeout_s: float = 120.0,
-        max_image_side: int = 896,
+        max_image_side: int = 512,
         temperature: float = 0.2,
         num_ctx: int = 2048,
-        num_predict_static: int = 400,
+        num_predict_static: int = 120,
         num_predict_describe: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)
-        # ``model`` handles the static (multimodal) pass.
+        # Multimodal model for the scene-description pass.
         self.model = model
-        # ``model_describe`` handles the describe pass. None means "reuse the
-        # static model" — used when you only want to manage one tag.
+        # Text-only model for narration. None means "reuse the static model"
+        # (useful if you only want to manage one tag).
         self.model_describe = model_describe or model
         # Strip trailing slash so urljoin-style concatenation below stays clean.
         self.host = host.rstrip("/")
         self.keep_alive = keep_alive
         self.timeout_s = timeout_s
-        # Gemma 3's vision tower expects 896×896. Sending larger images wastes
-        # bandwidth and compute on resizes Ollama would do anyway. 0 disables.
+        # Moondream's vision tower works at ~378×378 internally; sending a
+        # 512-px-side image is plenty and cheaper to base64 than larger.
         self.max_image_side = max_image_side
         self.temperature = temperature
-        # 2k is enough: one image (~256 tokens) + previous-context JSON +
-        # instructions ≈ 700 tokens worst case. The DataPool feeds a fresh
-        # prompt every call, so KV-cache reuse across calls is not relied on.
+        # 2k context fits one image (~256 tokens) + the narrator prompt with
+        # plenty of slack. The DataPool feeds a fresh prompt every call so KV
+        # reuse across calls is not relied on.
         self.num_ctx = num_ctx
-        # Static JSON has ~14 short fields plus a 1–2 sentence scene_description.
-        # 400 tokens fits worst case (~250 typical) while still capping any
-        # rambler that ignores the brevity instruction.
+        # 120 is well above a 1-2 sentence factual description; prevents the
+        # rare run where the model rambles into commentary.
         self.num_predict_static = num_predict_static
         # Describe ceiling: None means "derive from the user's verbosity
-        # setting at call time"; a number forces an explicit cap.
+        # setting at call time"; an integer forces an explicit cap.
         self.num_predict_describe = num_predict_describe
 
     # ------------------------------------------------------------------
@@ -266,38 +196,32 @@ class Gemma3OllamaVLM(ModelAdapter):
     # ------------------------------------------------------------------
 
     def run(self, frame: Any, pool_snapshot: dict, **kwargs: Any) -> Any:
+        """Two modes:
+
+        * ``mode="static"``   → str (the scene description). Orchestrator
+          writes the return value into ``dynamic.scene_description``.
+        * ``mode="describe"`` → str | None (the user-facing narration).
+        """
         mode = kwargs.get("mode", "static")
         if mode == "static":
-            return self._run_static(frame, pool_snapshot)
+            # Static pass does not need the snapshot — see _run_static comment.
+            return self._run_static(frame)
         return self._run_describe(pool_snapshot)
 
     # ------------------------------------------------------------------
-    # Static pass: image → structured JSON
+    # Scene-description pass (vision)
     # ------------------------------------------------------------------
 
-    def _run_static(self, frame: np.ndarray, snap: dict) -> dict:
-        previous = snap.get("static", {}) or {}
-        # Strip orchestrator-managed fields from the "previous" context — they
-        # are noise for the model and would just take up tokens.
-        previous_for_prompt = {
-            k: v for k, v in previous.items()
-            if k not in {"frame_id", "timestamp"}
-        }
-
+    def _run_static(self, frame: np.ndarray) -> str:
+        # Pool snapshot is intentionally not consumed: the simplified prompt
+        # does not condition on prior context. Scene-change detection is the
+        # capture layer's job (phash similarity), not the VLM's.
         image_b64 = self._encode_frame(frame)
-        prompt = STATIC_USER_TEMPLATE.format(
-            previous=json.dumps(previous_for_prompt, ensure_ascii=False)
-        )
 
         body = {
             "model": self.model,
-            "prompt": prompt,
-            "system": STATIC_SYSTEM,
+            "prompt": SCENE_PROMPT,
             "images": [image_b64],
-            # Ollama JSON mode: the server constrains decoding so the response
-            # is always parseable. Without this Gemma occasionally wraps JSON
-            # in ```json fences or adds prose.
-            "format": "json",
             "stream": False,
             "keep_alive": self.keep_alive,
             "options": {
@@ -310,59 +234,18 @@ class Gemma3OllamaVLM(ModelAdapter):
         try:
             resp = self._http_post("/api/generate", body)
         except Exception as e:
-            log.warning("Gemma3 static call failed: %s", e)
-            return dict(STATIC_DEFAULTS)
+            log.warning("Scene-description call failed: %s", e)
+            return ""
 
-        raw = resp.get("response", "")
-        return self._coerce_static(raw)
-
-    @staticmethod
-    def _coerce_static(raw: str) -> dict:
-        """Parse the model's JSON output and clamp every field to schema bounds.
-
-        Defensive on purpose: even with ``format: "json"`` we have seen models
-        emit a key the schema does not allow. Coercing here means the pool's
-        jsonschema check still passes, so downstream stages run instead of the
-        whole frame being dropped.
-        """
-        try:
-            parsed = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            log.warning("Gemma3 static returned non-JSON despite format=json: %r", raw[:200])
-            parsed = {}
-
-        out = dict(STATIC_DEFAULTS)
-        for key, default in STATIC_DEFAULTS.items():
-            if key not in parsed:
-                continue
-            value = parsed[key]
-            if key in ENUMS:
-                # Enums: lower-case + membership check, otherwise fall back.
-                value = str(value).lower()
-                if value not in ENUMS[key]:
-                    value = default
-            elif isinstance(default, bool):
-                # Accept "true"/"false"/0/1 in addition to real booleans.
-                if isinstance(value, str):
-                    value = value.strip().lower() == "true"
-                else:
-                    value = bool(value)
-            elif isinstance(default, int):
-                try:
-                    value = max(0, int(value))
-                except (TypeError, ValueError):
-                    value = default
-            elif isinstance(default, str):
-                # Free-form strings (scene_description, ...): coerce, trim,
-                # cap length so a runaway model can't bloat the describe prompt.
-                value = str(value).strip()
-                if len(value) > SCENE_DESC_MAX_CHARS:
-                    value = value[:SCENE_DESC_MAX_CHARS].rstrip() + "…"
-            out[key] = value
-        return out
+        text = (resp.get("response") or "").strip()
+        # Defensive trim — moondream is well-behaved but a runaway model
+        # would otherwise blow up the narrator prompt.
+        if len(text) > SCENE_DESC_MAX_CHARS:
+            text = text[:SCENE_DESC_MAX_CHARS].rstrip() + "…"
+        return text
 
     # ------------------------------------------------------------------
-    # Describe pass: pool → user-facing string
+    # Narrator pass (text-only)
     # ------------------------------------------------------------------
 
     def _run_describe(self, snap: dict) -> Optional[str]:
@@ -376,47 +259,30 @@ class Gemma3OllamaVLM(ModelAdapter):
             f"User profile: {PROFILE_GUIDANCE.get(vision, PROFILE_GUIDANCE['low_vision'])}\n"
             f"Verbosity: {VERBOSITY_GUIDANCE.get(verbosity, VERBOSITY_GUIDANCE['standard'])}\n"
             f"Reply in {language}. Speak in second person ('you see…', 'in front of you…'). "
-            f"If hazard_detected is true, lead with the hazard. Do not list raw fields; "
+            f"If the scene mentions a hazard, lead with it. Do not list raw fields; "
             f"speak naturally. Output the description text only — no preamble, no JSON."
         )
 
-        # The describe model is text-only — it never sees the image. Lead with
-        # the multimodal model's scene_description (the closest thing it has to
-        # "looking at the frame") and treat detector outputs as supporting
-        # evidence. Scene metadata (run_* flags, frame_id, etc.) is mostly
-        # orchestration noise so it goes last.
+        # Lead with the multimodal model's scene_description (the only thing
+        # in the snapshot that resembles "looking at the frame" from the
+        # narrator's POV); detector outputs are supporting evidence.
         dyn = dict(snap.get("dynamic", {}))
-        scene_desc = dyn.pop("scene_description", "") or ""
-        static_block = snap.get("static", {})
+        scene_desc = (dyn.pop("scene_description", "") or "").strip()
 
-        prompt_sections: list[str] = []
+        sections: list[str] = []
         if scene_desc:
-            prompt_sections.append(f"What the camera sees:\n{scene_desc}")
+            sections.append(f"What the camera sees:\n{scene_desc}")
         else:
-            # Fallback for older configs that didn't generate scene_description.
-            prompt_sections.append("What the camera sees: (no scene description available)")
+            sections.append("What the camera sees: (no scene description available)")
 
         if dyn:
-            prompt_sections.append(
+            sections.append(
                 "Detector outputs (objects, faces, text, ...):\n"
                 f"{json.dumps(dyn, ensure_ascii=False, default=str)}"
             )
 
-        # Only forward the static fields that actually affect phrasing —
-        # everything else is orchestration metadata the narrator does not need.
-        narrator_static = {
-            k: static_block.get(k)
-            for k in ("scene_type", "lighting_condition", "motion_level",
-                      "people_count", "hazard_detected", "priority_context")
-            if k in static_block
-        }
-        if narrator_static:
-            prompt_sections.append(
-                f"Scene context: {json.dumps(narrator_static, ensure_ascii=False)}"
-            )
-
-        prompt_sections.append("Write the description now.")
-        prompt = "\n\n".join(prompt_sections)
+        sections.append("Write the description now.")
+        prompt = "\n\n".join(sections)
 
         # Cap describe length: explicit override > verbosity preset.
         max_tokens = (
@@ -443,7 +309,7 @@ class Gemma3OllamaVLM(ModelAdapter):
         try:
             resp = self._http_post("/api/generate", body)
         except Exception as e:
-            log.warning("Gemma3 describe call failed: %s", e)
+            log.warning("Narrator call failed: %s", e)
             return None
 
         text = (resp.get("response") or "").strip()
@@ -457,7 +323,7 @@ class Gemma3OllamaVLM(ModelAdapter):
         """BGR ndarray → base64-encoded JPEG suitable for Ollama's ``images`` field.
 
         JPEG (not PNG) because the payload travels as base64 in JSON and a
-        12-megapixel PNG inflates the request well past Ollama's default body
+        full-resolution PNG would inflate the request well past Ollama's body
         limit. JPEG quality 85 is visually transparent for VLM inputs.
         """
         if frame is None or not isinstance(frame, np.ndarray):

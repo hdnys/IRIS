@@ -102,6 +102,20 @@ class DataPool:
         with self._lock:
             return self._state["static"].get("frame_id", "")
 
+    def begin_frame(self, frame_id: str, timestamp: float) -> None:
+        """Stamp the pool for a new frame and clear stale dynamic state.
+
+        Called by the orchestrator at the top of every frame so all parallel
+        adapter writes (gated on frame_id by ``update_dynamic``) target the
+        same frame. Static fields are left at their session defaults — the
+        new pipeline does not derive any static state from the VLM, and
+        scene-change detection lives in the capture layer.
+        """
+        with self._lock:
+            self._state["dynamic"] = {}
+            self._state["static"]["frame_id"] = frame_id
+            self._state["static"]["timestamp"] = timestamp
+
     def update_static(self, static_partial: dict, frame_id: str, timestamp: float) -> None:
         """Apply the VLM's static-pass output. Triggers a scene reset if requested.
 
