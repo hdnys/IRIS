@@ -3,26 +3,17 @@ adapters:
     module: Moteur.adapters.vlm_ollama
     class:  OllamaVLM
     params:
-      model:           moondream      # multimodal — writes scene description
+      model:           llava-phi3      # multimodal — writes scene description
       model_describe:  gemma3:1b      # text-only narrator
       host:  http://127.0.0.1:11434
-      keep_alive: 30m
+      keep_alive: -1
       timeout_s: 120
       max_image_side: 512             # moondream's vision tower is ~378px
       num_ctx: 2048
-      temperature: 0.3                # mild variation, not chaotic
-      num_predict_static: 120         # ~50-token descriptions; 120 is headroom
+      temperature: 0.3               # mild variation, not chaotic
+      num_predict_static: 220         # more headroom for verbose scene descriptions
       num_predict_describe: null      # null = derive from user_profile.verbosity
       departure_grace_s: 300          # mark a person gone only after 5 minutes absent
-    # Local HuggingFace alternative (no Ollama required):
-    #   module: Moteur.adapters.vlm_local
-    #   class:  LocalVLM
-    #   params:
-    #     vision_model_id:   vikhyatk/moondream2
-    #     vision_revision:   "2025-04-14"
-    #     narrator_model_id: Qwen/Qwen2.5-1.5B-Instruct
-    #     device: cuda
-    #     dtype: float16
   object_detection:
     module: Moteur.adapters.objdet_yolo
     class:  YoloObjectDetector
@@ -32,7 +23,7 @@ adapters:
       iou_threshold:   0.45
       max_image_side:  640
       keep_classes:    null    # e.g. [2, 56] = car/chair only (whitelist)
-      exclude_classes: [0]     # drop persons — SFace already covers them
+      exclude_classes: []      # persons included — YOLO is the headcount authority
       device:          null    # null = let ultralytics auto-pick (cpu/mps/cuda)
       verbose:         false
   face_recognition:
@@ -42,29 +33,29 @@ adapters:
       yunet_path:    models/face_detection_yunet_2023mar.onnx
       sface_path:    models/face_recognition_sface_2021dec.onnx
       gallery_dir:   data
-      cos_threshold: 0.3   # tuned by Mohamed — lower = stricter
+      cos_threshold: 0.3789   # tuned by Mohamed — lower = stricter
       det_confidence: 0.6
       det_nms:        0.3
       top_k:          5000
-  # emotion_detection / ocr / depth_estimation: add adapter modules and the
-  # orchestrator will pick them up automatically when the VLM sets their
-  # corresponding run_* flag.
 
 pipeline:
   max_workers: 4
-  infer_cooldown_s: 3.0   # minimum seconds between consecutive inference triggers
+  infer_cooldown_s: 10.0   # minimum seconds between consecutive inference triggers
+  annotate_vlm_faces:   false  # draw face boxes on the frame sent to the VLM
+  annotate_vlm_objects: false  # draw YOLO boxes on the frame sent to the VLM
 
 # Multi-signal scene-change detector (Moteur.core.scene_gate). All five
 # signals are normalized to [0, 1] and combined via the weights below;
 # inference fires when the combined score >= trigger_score.
 scene_gate:
-  trigger_score: 0.5
+  trigger_score: 0.4
   weights:
     dhash:      0.30   # pixel-level change (dHash hamming)
     face_count: 0.20   # any change in number of faces detected
     identity:   0.20   # set of recognized people changed
     flow:       0.10   # instantaneous optical-flow motion
     embedding:  0.20   # MobileNet logits cosine distance (semantic)
+    objects:    0.15   # YOLO label-set changed vs committed frame
   thresholds:
     # Per-signal "max" values — used to normalize each raw signal to [0, 1]
     # before weighting. Tuning rule of thumb: pick the value at which a
@@ -78,5 +69,5 @@ scene_gate:
 user_profile:
   vision_profile: total_blindness
   preferred_language: en-US
-  verbosity: standard
+  verbosity: detailed
   known_people: []

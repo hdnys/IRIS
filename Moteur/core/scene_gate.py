@@ -69,6 +69,10 @@ class GateSignals:
     identity_changed: bool = False
     flow_magnitude: float = 0.0      # mean ||flow||, pixel units
     embedding_distance: float = 0.0  # 1 - cosine_similarity, in [0, 2]
+    object_count: int = 0
+    object_count_delta: int = 0
+    object_labels: frozenset = field(default_factory=frozenset)
+    objects_changed: bool = False
 
     # Combined decision
     score: float = 0.0
@@ -79,6 +83,7 @@ class GateSignals:
     _dhash: Optional[np.ndarray] = None
     _embedding: Optional[np.ndarray] = None
     _faces: list = field(default_factory=list)
+    _objects: list = field(default_factory=list)
 
 
 class SceneGate:
@@ -97,6 +102,7 @@ class SceneGate:
         w_identity: float = 0.20,
         w_flow: float = 0.10,
         w_embedding: float = 0.20,
+        w_objects: float = 0.15,
         # Final threshold the weighted sum must exceed to fire.
         trigger_score: float = 0.20,
         # MobileNet ONNX model path. Auto-downloads from MOBILENET_URL if
@@ -113,6 +119,7 @@ class SceneGate:
         self.w_identity = w_identity
         self.w_flow = w_flow
         self.w_embedding = w_embedding
+        self.w_objects = w_objects
         self.trigger_score = trigger_score
         self._mobilenet_path = Path(mobilenet_path)
         self._download_if_missing = download_if_missing
@@ -129,6 +136,8 @@ class SceneGate:
         self._committed_face_count: Optional[int] = None
         self._committed_identity_set: frozenset = frozenset()
         self._committed_embedding: Optional[np.ndarray] = None
+        self._committed_object_count: Optional[int] = None
+        self._committed_object_labels: frozenset = frozenset()
 
         self._net: Optional[cv2.dnn.Net] = None
         # Concurrent evaluate() + commit() can race on the committed_*
@@ -171,13 +180,15 @@ class SceneGate:
         self,
         frame: np.ndarray,
         faces: Optional[list] = None,
+        objects: Optional[list] = None,
     ) -> GateSignals:
         """Compute all signals for a single frame; return the combined decision.
 
         ``faces`` lets the caller pass pre-computed SFace output to avoid a
-        second YuNet/SFace pass per frame — the live pipeline runs SFace in
-        its main loop (so face boxes can be drawn on every frame without
-        lag) and forwards the result here.
+        second YuNet/SFace pass per frame.  ``objects`` lets the caller pass
+        pre-computed YOLO detections (same reason — the live pipeline runs the
+        ObjDetWorker async and forwards its latest result here so YOLO never
+        runs twice per frame).
         """
         sig = GateSignals()
 
@@ -188,6 +199,8 @@ class SceneGate:
             committed_face_count = self._committed_face_count
             committed_identity = self._committed_identity_set
             committed_embedding = self._committed_embedding
+            committed_object_count = self._committed_object_count
+            committed_object_labels = self._committed_object_labels
 
         if committed_dhash is None:
             # First frame of the session — treat everything as "very different"
@@ -224,6 +237,22 @@ class SceneGate:
                 sig.face_count_delta = sig.face_count - committed_face_count
                 sig.identity_changed = sig.identity_set != committed_identity
 
+        # 3b) YOLO object label-set change vs committed frame.
+        if objects is not None:
+            sig._objects = list(objects)
+        if sig._objects or objects is not None:
+            sig.object_count = len(sig._objects)
+            sig.object_labels = frozenset(
+                o.get("label", "") for o in sig._objects
+                if isinstance(o, dict) and o.get("label")
+            )
+            if committed_object_count is None:
+                sig.object_count_delta = sig.object_count
+                sig.objects_changed = bool(sig.object_labels)
+            else:
+                sig.object_count_delta = sig.object_count - committed_object_count
+                sig.objects_changed = sig.object_labels != committed_object_labels
+
         # 4) Optical flow vs the previous frame.
         sig.flow_magnitude = self._optical_flow(frame)
 
@@ -243,6 +272,7 @@ class SceneGate:
             + self.w_identity   * (1.0 if sig.identity_changed else 0.0)
             + self.w_flow       * min(1.0, sig.flow_magnitude / self.flow_max)
             + self.w_embedding  * min(1.0, sig.embedding_distance / self.embedding_max)
+            + self.w_objects    * (1.0 if sig.objects_changed else 0.0)
         )
         sig.score = float(score)
         sig.triggered = sig.score >= self.trigger_score
@@ -263,6 +293,8 @@ class SceneGate:
             self._committed_identity_set = signals.identity_set
             if signals._embedding is not None:
                 self._committed_embedding = signals._embedding
+            self._committed_object_count = signals.object_count
+            self._committed_object_labels = signals.object_labels
 
     # ------------------------------------------------------------------
     # Internal: per-signal helpers

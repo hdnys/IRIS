@@ -170,19 +170,20 @@ class GateWorker(threading.Thread):
     def __init__(self, gate: SceneGate) -> None:
         super().__init__(daemon=True, name="iris-gate")
         self._gate = gate
-        # Pending = (frame, faces_or_None). The main loop pre-computes SFace
-        # so face boxes can be drawn on every frame; we forward those results
-        # here to avoid a second YuNet/SFace pass per frame.
-        self._pending: Optional[tuple[np.ndarray, Optional[list]]] = None
+        # Pending = (frame, faces_or_None, objects_or_None). The main loop
+        # pre-computes SFace and reads ObjDetWorker.latest_objects() so both
+        # results are forwarded here and never recomputed inside the gate.
+        self._pending: Optional[tuple[np.ndarray, Optional[list], Optional[list]]] = None
         self._latest_signals: Optional[GateSignals] = None
         self._lock = threading.Lock()
         self._wakeup = threading.Event()
         # See TTSWorker note — never name this `_stop`.
         self._stop_evt = threading.Event()
 
-    def submit(self, frame: np.ndarray, faces: Optional[list] = None) -> None:
+    def submit(self, frame: np.ndarray, faces: Optional[list] = None,
+               objects: Optional[list] = None) -> None:
         with self._lock:
-            self._pending = (frame, faces)
+            self._pending = (frame, faces, objects)
         self._wakeup.set()
 
     def latest_signals(self) -> Optional[GateSignals]:
@@ -211,9 +212,9 @@ class GateWorker(threading.Thread):
                 self._pending = None
             if pending is None:
                 continue
-            frame, faces = pending
+            frame, faces, objects = pending
             try:
-                signals = self._gate.evaluate(frame, faces=faces)
+                signals = self._gate.evaluate(frame, faces=faces, objects=objects)
             except Exception as e:
                 print(f"[gate error] {e}")
                 continue
@@ -285,7 +286,7 @@ class InferenceWorker(threading.Thread):
     def __init__(self, orch: Orchestrator) -> None:
         super().__init__(daemon=True, name="iris-infer")
         self._orch = orch
-        self._pending_frame: Optional[np.ndarray] = None
+        self._pending: Optional[tuple[np.ndarray, Optional[list], Optional[list]]] = None
         self._latest_result: Optional[dict] = None
         self._lock = threading.Lock()
         self._busy = threading.Event()
@@ -293,9 +294,11 @@ class InferenceWorker(threading.Thread):
         self._stop_evt = threading.Event()
         self._wakeup = threading.Event()
 
-    def submit(self, frame: np.ndarray) -> None:
+    def submit(self, frame: np.ndarray,
+               objects: Optional[list] = None,
+               faces: Optional[list] = None) -> None:
         with self._lock:
-            self._pending_frame = frame
+            self._pending = (frame, objects, faces)
         self._wakeup.set()
 
     def is_busy(self) -> bool:
@@ -316,15 +319,16 @@ class InferenceWorker(threading.Thread):
             if self._stop_evt.is_set():
                 break
             with self._lock:
-                frame = self._pending_frame
-                self._pending_frame = None
-            if frame is None:
+                pending = self._pending
+                self._pending = None
+            if pending is None:
                 continue
+            frame, objects, faces = pending
 
             self._busy.set()
             try:
                 t0 = time.perf_counter()
-                description = self._orch.process_frame(frame)
+                description = self._orch.process_frame(frame, objects=objects, faces=faces)
                 ms = (time.perf_counter() - t0) * 1000
                 snap = self._orch.pool.snapshot()
                 dyn = snap.get("dynamic", {})
@@ -461,6 +465,10 @@ def draw_overlay(frame: np.ndarray, result: Optional[dict],
             f"  faces : {signals.face_count} (Δ {signals.face_count_delta:+d})  "
             f"id-chg: {'Y' if signals.identity_changed else 'N'}"
         )
+        hud.append(
+            f"  objs  : {signals.object_count} (Δ {signals.object_count_delta:+d})  "
+            f"chg: {'Y' if signals.objects_changed else 'N'}"
+        )
         hud.append(f"  embed : {signals.embedding_distance:.3f}")
     if result:
         hud.append(f"infer   : {result['ms']:5.0f} ms")
@@ -566,6 +574,7 @@ def build_scene_gate(cfg: dict, sface_adapter) -> SceneGate:
         w_identity       = float(weights.get("identity", 0.20)),
         w_flow           = float(weights.get("flow", 0.10)),
         w_embedding      = float(weights.get("embedding", 0.20)),
+        w_objects        = float(weights.get("objects", 0.15)),
         trigger_score    = float(sg_cfg.get("trigger_score", 0.20)),
         mobilenet_path   = sg_cfg.get(
             "mobilenet_path",
@@ -593,6 +602,8 @@ def main() -> None:
         cfg = yaml.safe_load(f)
 
     pipeline_cfg = cfg.get("pipeline", {})
+    annotate_vlm_faces   = bool(pipeline_cfg.get("annotate_vlm_faces",   True))
+    annotate_vlm_objects = bool(pipeline_cfg.get("annotate_vlm_objects", True))
 
     print("Building registry + orchestrator…")
     pool = DataPool(user_profile=cfg["user_profile"])
@@ -632,6 +643,7 @@ def main() -> None:
         f"tts={'on' if not args.no_tts else 'off'}.\n"
         "Keys: q/ESC = quit   |   l = learn a new face   |   p = toggle pool window\n"
     )
+
 
     fps_t0 = time.perf_counter()
     fps_n = 0
@@ -682,10 +694,13 @@ def main() -> None:
                 print(f"[sface error] {e}")
                 live_faces = []
 
-            gate_worker.submit(frame, faces=live_faces)
+            # Snapshot last frame's YOLO result before submitting so the gate
+            # always gets objects that correspond to the committed reference
+            # (one frame behind at most — acceptable for change detection).
+            live_objects = od_worker.latest_objects()
+            gate_worker.submit(frame, faces=live_faces, objects=live_objects)
             od_worker.submit(frame)
             signals = gate_worker.latest_signals()
-            live_objects = od_worker.latest_objects()
 
             should_submit = (
                 not infer_worker.is_busy()
@@ -696,8 +711,12 @@ def main() -> None:
                     should_submit = False
 
             if should_submit:
-                frame_for_vlm = draw_face_boxes(frame, live_faces)
-                infer_worker.submit(frame_for_vlm)
+                frame_for_vlm = frame
+                if annotate_vlm_objects:
+                    frame_for_vlm = draw_object_boxes(frame_for_vlm, live_objects)
+                if annotate_vlm_faces:
+                    frame_for_vlm = draw_face_boxes(frame_for_vlm, live_faces)
+                infer_worker.submit(frame_for_vlm, objects=live_objects, faces=live_faces)
                 if signals is not None:
                     gate_worker.commit_latest()
 
