@@ -8,7 +8,7 @@ adapters:
       host:  http://127.0.0.1:11434
       keep_alive: -1
       timeout_s: 120
-      max_image_side: 512             # moondream's vision tower is ~378px
+      max_image_side: 512             # llava-phi3 vision encoder; 512px is sufficient
       num_ctx: 2048
       temperature: 0.3               # mild variation, not chaotic
       num_predict_static: 220         # more headroom for verbose scene descriptions
@@ -41,8 +41,8 @@ adapters:
 pipeline:
   max_workers: 4
   infer_cooldown_s: 10.0   # minimum seconds between consecutive inference triggers
-  annotate_vlm_faces:   false  # draw face boxes on the frame sent to the VLM
-  annotate_vlm_objects: false  # draw YOLO boxes on the frame sent to the VLM
+  annotate_vlm_faces:   true  # draw face boxes on the frame sent to the VLM
+  annotate_vlm_objects: true  # draw YOLO boxes on the frame sent to the VLM
 
 # Multi-signal scene-change detector (Moteur.core.scene_gate). All five
 # signals are normalized to [0, 1] and combined via the weights below;

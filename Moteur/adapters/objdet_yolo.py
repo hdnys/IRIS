@@ -70,14 +70,14 @@ class YoloObjectDetector(ModelAdapter):
     def __init__(
         self,
         role: str,
-        weights_path: str = "models/yolo12n.pt",
-        conf_threshold: float = 0.35,
-        iou_threshold: float = 0.45,
-        max_image_side: Optional[int] = 640,
-        keep_classes: Optional[list[int]] = None,
-        exclude_classes: Optional[list[int]] = None,
-        device: Optional[str] = None,
-        verbose: bool = False,
+        weights_path: str,
+        conf_threshold: float,
+        iou_threshold: float,
+        max_image_side: Optional[int],
+        keep_classes: Optional[list[int]],
+        exclude_classes: Optional[list[int]],
+        device: Optional[str],
+        verbose: bool,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)

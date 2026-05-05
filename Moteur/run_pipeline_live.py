@@ -604,6 +604,7 @@ def main() -> None:
     pipeline_cfg = cfg.get("pipeline", {})
     annotate_vlm_faces   = bool(pipeline_cfg.get("annotate_vlm_faces",   True))
     annotate_vlm_objects = bool(pipeline_cfg.get("annotate_vlm_objects", True))
+    infer_cooldown_s     = float(pipeline_cfg.get("infer_cooldown_s", 10.0))
 
     print("Building registry + orchestrator…")
     pool = DataPool(user_profile=cfg["user_profile"])
@@ -648,6 +649,7 @@ def main() -> None:
     fps_t0 = time.perf_counter()
     fps_n = 0
     cam_fps = 0.0
+    last_infer_time = 0.0
     last_announced = ""
     last_pool_img: Optional[np.ndarray] = None
     show_pool = True
@@ -705,6 +707,7 @@ def main() -> None:
             should_submit = (
                 not infer_worker.is_busy()
                 and not tts.is_busy()
+                and (time.perf_counter() - last_infer_time) >= infer_cooldown_s
             )
             if should_submit and use_gate:
                 if signals is None or not signals.triggered:
@@ -717,6 +720,7 @@ def main() -> None:
                 if annotate_vlm_faces:
                     frame_for_vlm = draw_face_boxes(frame_for_vlm, live_faces)
                 infer_worker.submit(frame_for_vlm, objects=live_objects, faces=live_faces)
+                last_infer_time = time.perf_counter()
                 if signals is not None:
                     gate_worker.commit_latest()
 

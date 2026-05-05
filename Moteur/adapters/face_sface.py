@@ -67,13 +67,13 @@ class SFaceAdapter(ModelAdapter):
     def __init__(
         self,
         role: str,
-        yunet_path: str = "models/face_detection_yunet_2023mar.onnx",
-        sface_path: str = "models/face_recognition_sface_2021dec.onnx",
-        gallery_dir: str = "data",
-        cos_threshold: float = 0.3,
-        det_confidence: float = 0.6,
-        det_nms: float = 0.3,
-        top_k: int = 5000,
+        yunet_path: str,
+        sface_path: str,
+        gallery_dir: str,
+        cos_threshold: float,
+        det_confidence: float,
+        det_nms: float,
+        top_k: int,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)
@@ -100,17 +100,6 @@ class SFaceAdapter(ModelAdapter):
 
     def load(self) -> None:
         """Load both ONNX models and build the reference gallery."""
-        if not Path(self.yunet_path).exists():
-            raise RuntimeError(
-                f"YuNet model not found at '{self.yunet_path}'. "
-                "Copy it from Mohamed's branch: models/face_detection_yunet_2023mar.onnx"
-            )
-        if not Path(self.sface_path).exists():
-            raise RuntimeError(
-                f"SFace model not found at '{self.sface_path}'. "
-                "Copy it from Mohamed's branch: models/face_recognition_sface_2021dec.onnx"
-            )
-
         # Input size (320, 320) is the model's native resolution; YuNet
         # re-scales internally, so we override per frame in run().
         self._detector = cv2.FaceDetectorYN.create(

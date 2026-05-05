@@ -6,7 +6,7 @@ Architecture:
   a free-form scene description string (1–2 sentences). No JSON, no run_*
   flags, no orchestration metadata. The orchestrator routes the string into
   ``dynamic.scene_description`` so it lands alongside every other adapter's
-  output. Default model: ``moondream`` (~1.9 B params, built for fast VQA).
+  output. Default model: ``llava-phi3`` (~2.9 B params, fast multimodal VQA).
 
 * ``mode="describe"`` — text-only narration pass. Reads the assembled pool
   (scene description + detector outputs) and emits the user-facing string.
@@ -20,7 +20,7 @@ description (~50 generated tokens, ~250–500 ms warm).
 
 Pull both tags once::
 
-    ollama pull moondream
+    ollama pull llava-phi3
     ollama pull gemma3:1b
 
 YAML wiring::
@@ -29,7 +29,7 @@ YAML wiring::
       module: Moteur.adapters.vlm_ollama
       class:  OllamaVLM
       params:
-        model:           moondream
+        model:           llava-phi3
         model_describe:  gemma3:1b
         host:  http://127.0.0.1:11434
         keep_alive: 30m
@@ -64,8 +64,8 @@ from Moteur.adapters.base import ModelAdapter
 log = logging.getLogger(__name__)
 
 
-# Single short prompt — Moondream and Gemma both follow plain English better
-# than schema-style instructions for this kind of task.
+# Single short prompt — llava-phi3 and gemma3:1b both follow plain English
+# better than schema-style instructions for this kind of task.
 SCENE_PROMPT = (
     "Describe what you see in 1-2 short factual sentences. "
     "People and objects may have colored face-detection boxes and labels over them; "
@@ -171,33 +171,102 @@ def _format_objects_line(objects: list[dict]) -> str:
 SCENE_DESC_MAX_CHARS = 600
 
 
-def _build_grounding(objects: list, faces: list) -> str:
-    """Compact sensor-grounding block appended to SCENE_PROMPT for moondream.
+def _build_personas(objects: list, faces: list) -> tuple[list[dict], list[dict]]:
+    """Match YOLO person boxes with SFace face boxes into unified Persona dicts.
+
+    Matching criterion: face bbox center falls inside the YOLO person bbox.
+    O(P × F) — negligible for typical P, F < 20.
+
+    Returns (personas, non_person_objects).
+
+    Each persona dict:
+        person_id         str            "Elie" | "Unknown"
+        face_confidence   float | None   SFace cosine score; None if unmatched
+        position          str | None     YOLO grid label ("center-middle", …)
+        size              str | None     "small" | "medium" | "large"
+        area_fraction     float | None   person-box area / frame area
+        bounding_box      dict | None    YOLO person box {x,y,width,height}
+        face_bounding_box dict | None    SFace face box; None if unmatched
+
+    Unmatched persons → persona with person_id "Unknown", no face fields.
+    Unmatched faces   → persona built from face box only (YOLO missed the body).
+    Headcount authority remains YOLO (bounding_box is not None) — unmatched
+    faces are included for identity but must not inflate the person count.
+    """
+    persons     = [o for o in objects if isinstance(o, dict) and o.get("label") == "person"]
+    non_persons = [o for o in objects if isinstance(o, dict) and o.get("label") != "person"]
+
+    matched = [False] * len(faces)
+    personas: list[dict] = []
+
+    for person in persons:
+        pbb = person.get("bounding_box", {})
+        px, py = float(pbb.get("x", 0)), float(pbb.get("y", 0))
+        pw, ph = float(pbb.get("width", 0)), float(pbb.get("height", 0))
+
+        best_idx, best_conf = -1, -1.0
+        for i, face in enumerate(faces):
+            if matched[i]:
+                continue
+            fbb = face.get("bounding_box", {})
+            cx = float(fbb.get("x", 0)) + float(fbb.get("width", 0)) / 2.0
+            cy = float(fbb.get("y", 0)) + float(fbb.get("height", 0)) / 2.0
+            if px <= cx <= px + pw and py <= cy <= py + ph:
+                conf = float(face.get("confidence", 0.0))
+                if conf > best_conf:
+                    best_conf, best_idx = conf, i
+
+        face = faces[best_idx] if best_idx >= 0 else None
+        if best_idx >= 0:
+            matched[best_idx] = True
+
+        personas.append({
+            "person_id":         face["person_id"] if face else "Unknown",
+            "face_confidence":   round(best_conf, 3) if best_idx >= 0 else None,
+            "position":          person.get("position"),
+            "size":              person.get("size"),
+            "area_fraction":     person.get("area_fraction"),
+            "bounding_box":      pbb,
+            "face_bounding_box": face.get("bounding_box") if face else None,
+        })
+
+    # Faces whose center wasn't inside any person box (YOLO body miss).
+    for i, face in enumerate(faces):
+        if not matched[i]:
+            personas.append({
+                "person_id":         face["person_id"],
+                "face_confidence":   round(float(face.get("confidence", 0.0)), 3),
+                "position":          None,
+                "size":              None,
+                "area_fraction":     None,
+                "bounding_box":      None,
+                "face_bounding_box": face.get("bounding_box"),
+            })
+
+    return personas, non_persons
+
+
+def _build_grounding(personas: list[dict], non_person_objects: list[dict]) -> str:
+    """Compact sensor-grounding block appended to SCENE_PROMPT for llava-phi3.
 
     Tells the vision model exactly what YOLO and SFace already confirmed so it
     can anchor its description to ground truth rather than hallucinating.
-    The instruction at the end explicitly forbids inventing objects outside
-    the list.
     """
     parts: list[str] = []
 
-    if faces:
-        named   = [f["person_id"] for f in faces
-                   if isinstance(f, dict) and f.get("person_id") and f["person_id"] != "Unknown"]
-        unknown = sum(1 for f in faces
-                      if isinstance(f, dict) and f.get("person_id") == "Unknown")
+    if personas:
+        named   = [p["person_id"] for p in personas if p["person_id"] != "Unknown"]
+        unknown = sum(1 for p in personas if p["person_id"] == "Unknown")
         people: list[str] = list(named)
         if unknown:
             people.append(f"{unknown} unrecognized {'person' if unknown == 1 else 'people'}")
         if people:
             parts.append("People detected: " + ", ".join(people))
 
-    non_person = [o for o in objects
-                  if isinstance(o, dict) and o.get("label") and o.get("label") != "person"]
-    if non_person:
+    if non_person_objects:
         obj_strs = [
             f"{o['label']} ({o.get('size','?')}, {o.get('position','?')})"
-            for o in non_person[:_MAX_OBJECTS_FOR_NARRATOR]
+            for o in non_person_objects[:_MAX_OBJECTS_FOR_NARRATOR]
         ]
         parts.append("Objects detected: " + ", ".join(obj_strs))
 
@@ -221,17 +290,17 @@ class OllamaVLM(ModelAdapter):
     def __init__(
         self,
         role: str,
-        model: str = "moondream",
-        model_describe: Optional[str] = "gemma3:1b",
-        host: str = "http://127.0.0.1:11434",
-        keep_alive: str = "30m",
-        timeout_s: float = 120.0,
-        max_image_side: int = 512,
-        temperature: float = 0.3,
-        num_ctx: int = 2048,
-        num_predict_static: int = 120,
-        num_predict_describe: Optional[int] = None,
-        departure_grace_s: float = 300.0,
+        model: str,
+        model_describe: str,
+        host: str,
+        keep_alive: str,
+        timeout_s: float,
+        max_image_side: int,
+        temperature: float,
+        num_ctx: int,
+        num_predict_static: int,
+        num_predict_describe: Optional[int],
+        departure_grace_s: float,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)
@@ -244,8 +313,8 @@ class OllamaVLM(ModelAdapter):
         self.host = host.rstrip("/")
         self.keep_alive = keep_alive
         self.timeout_s = timeout_s
-        # Moondream's vision tower works at ~378×378 internally; sending a
-        # 512-px-side image is plenty and cheaper to base64 than larger.
+        # llava-phi3's vision encoder works efficiently at ≤512 px per side;
+        # larger inputs cost more base64 without improving description quality.
         self.max_image_side = max_image_side
         self.temperature = temperature
         # 2k context fits one image (~256 tokens) + the narrator prompt with
@@ -330,7 +399,7 @@ class OllamaVLM(ModelAdapter):
         grounding = _build_grounding(objects or [], faces or [])
         prompt = SCENE_PROMPT + ("\n\n" + grounding if grounding else "")
 
-        # ── model (self.model, e.g. moondream) ──────────────────────────
+        # ── model (self.model, e.g. llava-phi3) ─────────────────────────
         # Receives: SCENE_PROMPT + optional sensor-grounding block (YOLO
         #           objects + SFace people) + the JPEG frame as base64.
         # Returns:  a raw scene-description string (no system prompt, no JSON).
@@ -354,8 +423,8 @@ class OllamaVLM(ModelAdapter):
             return ""
 
         text = (resp.get("response") or "").strip()
-        # Defensive trim — moondream is well-behaved but a runaway model
-        # would otherwise blow up the narrator prompt.
+        # Defensive trim — a runaway model would otherwise blow up the
+        # narrator prompt.
         if len(text) > SCENE_DESC_MAX_CHARS:
             text = text[:SCENE_DESC_MAX_CHARS].rstrip() + "…"
         return text
