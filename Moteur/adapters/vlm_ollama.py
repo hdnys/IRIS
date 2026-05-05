@@ -67,13 +67,12 @@ log = logging.getLogger(__name__)
 # Single short prompt — llava-phi3 and gemma3:1b both follow plain English
 # better than schema-style instructions for this kind of task.
 SCENE_PROMPT = (
-    "Describe what you see in 1-2 short factual sentences. "
-    "People and objects may have colored face-detection boxes and labels over them; "
-    "ignore these overlays and never describe them. "
-    "Mention people (count and what they appear to be doing), key objects, "
-    "spatial layout (left/right/center/foreground), "
-    " Do not give advice. Do not greet. "
-    "Output only the description."
+    "Describe the scene in 1-2 short, factual sentences for a blind user. "
+    "Use the text labels in the image to identify people and objects, but NEVER use the words 'box', 'label', 'text', or 'overlay'. "
+    "Treat the names as your inherent knowledge of who and what is present. "
+    "Identify the number of people, name them, and make educated logical deductions to describe their actions and interactions with the environment. "
+    "Note key objects and precise spatial layout (left, right, center, foreground). "
+    "Do not give advice. Do not greet. Output only the exact scene description."
 )
 
 

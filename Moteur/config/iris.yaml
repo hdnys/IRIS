@@ -4,7 +4,7 @@ adapters:
     class:  OllamaVLM
     params:
       model:           llava-phi3      # multimodal — writes scene description
-      model_describe:  gemma3:1b      # text-only narrator
+      model_describe:  llava-phi3 #gemma3:1b      # text-only narrator
       host:  http://127.0.0.1:11434
       keep_alive: -1
       timeout_s: 120
