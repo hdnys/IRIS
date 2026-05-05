@@ -41,8 +41,8 @@ adapters:
 pipeline:
   max_workers: 4
   infer_cooldown_s: 10.0   # minimum seconds between consecutive inference triggers
-  annotate_vlm_faces:   true  # draw face boxes on the frame sent to the VLM
-  annotate_vlm_objects: true  # draw YOLO boxes on the frame sent to the VLM
+  annotate_vlm_faces:   false  # draw face boxes on the frame sent to the VLM
+  annotate_vlm_objects: false  # draw YOLO boxes on the frame sent to the VLM
 
 # Multi-signal scene-change detector (Moteur.core.scene_gate). All five
 # signals are normalized to [0, 1] and combined via the weights below;
