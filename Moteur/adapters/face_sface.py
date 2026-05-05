@@ -88,8 +88,11 @@ class SFaceAdapter(ModelAdapter):
         # Populated in load()
         self._detector: Optional[cv2.FaceDetectorYN] = None
         self._recognizer: Optional[cv2.FaceRecognizerSF] = None
-        # name → embedding ndarray
-        self._gallery: dict[str, np.ndarray] = {}
+        # name → list of embedding ndarrays. Multiple references per person
+        # (different angles, lighting) markedly improves recognition under
+        # head turns and partial occlusion. _match() takes the max similarity
+        # across all of a person's embeddings.
+        self._gallery: dict[str, list[np.ndarray]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -171,36 +174,110 @@ class SFaceAdapter(ModelAdapter):
     # ------------------------------------------------------------------
 
     def _match(self, feat: np.ndarray) -> tuple[str, float]:
-        """Compare feat against the gallery and return (name, score)."""
+        """Compare feat against the gallery and return (name, score).
+
+        For each person we take the *max* cosine similarity across all of
+        their reference embeddings — recognition succeeds if ANY reference
+        view matches well. This is what makes multi-image galleries useful:
+        a head-turn that wouldn't match the frontal reference can still
+        match the left- or right-profile reference.
+        """
         best_name, best_score = "Unknown", -1.0
-        for name, ref in self._gallery.items():
-            score = float(self._recognizer.match(
-                ref, feat, cv2.FaceRecognizerSF_FR_COSINE
-            ))
-            if score > best_score:
-                best_name, best_score = name, score
+        for name, refs in self._gallery.items():
+            for ref in refs:
+                score = float(self._recognizer.match(
+                    ref, feat, cv2.FaceRecognizerSF_FR_COSINE
+                ))
+                if score > best_score:
+                    best_name, best_score = name, score
         if best_score < self.cos_threshold:
             best_name = "Unknown"
         return best_name, best_score
 
     def _build_gallery(self) -> None:
-        """Embed every reference image in gallery_dir into self._gallery."""
+        """Embed every reference image in gallery_dir into self._gallery.
+
+        Two layouts are supported simultaneously:
+
+        * Single-image (legacy)::
+
+              data/Mohamad.jpeg          → 1 reference for "Mohamad"
+
+        * Multi-image (per-person folder, used by FaceLearner)::
+
+              data/Mohamad/1.jpg
+              data/Mohamad/2.jpg         → N references for "Mohamad"
+              data/Mohamad/3.jpg
+
+        If a folder ``data/<name>/`` exists, the legacy ``data/<name>.<ext>``
+        file is ignored — the folder wins so a freshly-learned multi-shot
+        gallery isn't diluted by the older single shot.
+        """
+        new_gallery: dict[str, list[np.ndarray]] = {}
+
         if not self.gallery_dir.is_dir():
             log.warning("Gallery dir '%s' not found — no known faces loaded.", self.gallery_dir)
+            self._gallery = new_gallery
             return
 
-        for path in sorted(self.gallery_dir.iterdir()):
-            if path.suffix.lower() not in _GALLERY_EXTS:
+        # Pre-collect folder names so we can shadow legacy single files of the
+        # same stem.
+        folder_names = {
+            entry.name for entry in self.gallery_dir.iterdir() if entry.is_dir()
+        }
+
+        for entry in sorted(self.gallery_dir.iterdir()):
+            if entry.is_dir():
+                # Multi-image: average / store every reference image as its
+                # own embedding.
+                name = entry.name
+                embs: list[np.ndarray] = []
+                for img_path in sorted(entry.iterdir()):
+                    if img_path.suffix.lower() not in _GALLERY_EXTS:
+                        continue
+                    img = cv2.imread(str(img_path))
+                    if img is None:
+                        log.warning("Cannot read gallery image: %s", img_path)
+                        continue
+                    emb = self._embed_best_face(img)
+                    if emb is None:
+                        log.warning("No face in %s — skipping.", img_path.name)
+                        continue
+                    embs.append(emb)
+                if embs:
+                    new_gallery[name] = embs
                 continue
-            img = cv2.imread(str(path))
+
+            # Legacy single image at the gallery root.
+            if entry.suffix.lower() not in _GALLERY_EXTS:
+                continue
+            if entry.stem in folder_names:
+                # A multi-image folder for this person already exists;
+                # don't pollute their gallery with the older single shot.
+                continue
+            img = cv2.imread(str(entry))
             if img is None:
-                log.warning("Cannot read gallery image: %s", path)
+                log.warning("Cannot read gallery image: %s", entry)
                 continue
             emb = self._embed_best_face(img)
             if emb is None:
-                log.warning("No face found in gallery image: %s", path.name)
+                log.warning("No face found in gallery image: %s", entry.name)
                 continue
-            self._gallery[path.stem] = emb
+            new_gallery[entry.stem] = [emb]
+
+        self._gallery = new_gallery
+
+    def reload_gallery(self) -> None:
+        """Re-scan ``gallery_dir`` and rebuild the gallery in-place.
+
+        Public so the live pipeline's face-learner can refresh after
+        capturing a new person without restarting the whole adapter.
+        """
+        self._build_gallery()
+        log.info(
+            "SFaceAdapter gallery reloaded — %d people: %s",
+            len(self._gallery), list(self._gallery),
+        )
 
     def _embed_best_face(self, img: np.ndarray) -> Optional[np.ndarray]:
         """Detect the most-confident face in img and return its embedding."""

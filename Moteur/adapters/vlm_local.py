@@ -99,6 +99,8 @@ SCENE_DESC_MAX_CHARS = 600
 STATIC_PROMPT_TEMPLATE = (
     "Examine the image. Output ONLY a single JSON object — no prose, no markdown "
     "fences. Required keys with their value types:\n"
+    "Ignore any colored face-detection boxes or labels drawn over people; "
+    "never describe these overlays as scene content.\n"
     "  is_new_scene (bool, true if scene differs significantly from previous)\n"
     "  scene_type (indoor|outdoor|vehicle|unknown)\n"
     "  lighting_condition (bright|normal|dim|dark|unknown)\n"

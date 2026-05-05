@@ -52,6 +52,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from typing import Any, Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -68,6 +69,8 @@ log = logging.getLogger(__name__)
 # than schema-style instructions for this kind of task.
 SCENE_PROMPT = (
     "Describe what you see in 1-2 short factual sentences. "
+    "People may have colored face-detection boxes and labels over them; "
+    "ignore these overlays and never describe them. "
     "Mention people (count and what they appear to be doing), key objects, "
     "spatial layout (left/right/center/foreground), and "
     "(steps, traffic, obstacles). Do not give advice. Do not greet. "
@@ -111,6 +114,59 @@ VERBOSITY_NUM_PREDICT = {
     "detailed": 110,
 }
 
+# Cap on the number of YOLO detections we forward to the narrator. Beyond this
+# the prompt bloats faster than gemma3:1b can absorb the structure.
+_MAX_OBJECTS_FOR_NARRATOR = 8
+
+
+def _format_objects_line(objects: list[dict]) -> str:
+    """Compact, narrator-friendly summary of YOLO detections.
+
+    Groups duplicates by label so the prompt stays short:
+
+        [{label:'chair',position:'center',size:'large'},
+         {label:'chair',position:'left-middle',size:'medium'},
+         {label:'bottle',position:'top-right',size:'small'}]
+
+    becomes::
+
+        "2 chairs (large center, medium left-middle), bottle (small top-right)"
+
+    Caller passes the adapter's already-sorted list (most-confident first), so
+    the truncation below preserves the most prominent detections.
+    """
+    if not objects:
+        return ""
+
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for obj in objects[:_MAX_OBJECTS_FOR_NARRATOR]:
+        if not isinstance(obj, dict):
+            continue
+        label = str(obj.get("label", "")).strip()
+        if not label:
+            continue
+        if label not in grouped:
+            order.append(label)
+            grouped[label] = []
+        grouped[label].append(obj)
+
+    parts: list[str] = []
+    for label in order:
+        items = grouped[label]
+        descs = [
+            f"{o.get('size','?')} {o.get('position','?')}"
+            for o in items
+        ]
+        if len(items) == 1:
+            parts.append(f"{label} ({descs[0]})")
+        else:
+            # Pluralize the simple way — "chairs" is fine for the small model;
+            # we don't need linguistic correctness for cases like "mouse".
+            parts.append(f"{len(items)} {label}s ({', '.join(descs)})")
+    return ", ".join(parts)
+
+
 # Cap on raw scene_description length — defends the narrator's prompt from
 # a runaway VLM that ignores the "1-2 sentences" instruction.
 SCENE_DESC_MAX_CHARS = 600
@@ -135,6 +191,7 @@ class OllamaVLM(ModelAdapter):
         num_ctx: int = 2048,
         num_predict_static: int = 120,
         num_predict_describe: Optional[int] = None,
+        departure_grace_s: float = 300.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)
@@ -161,6 +218,9 @@ class OllamaVLM(ModelAdapter):
         # Describe ceiling: None means "derive from the user's verbosity
         # setting at call time"; an integer forces an explicit cap.
         self.num_predict_describe = num_predict_describe
+        # A recognized person must be continuously absent this long before we
+        # narrate that they left.
+        self.departure_grace_s = max(0.0, float(departure_grace_s))
 
         # ---- Cross-frame memory for change-aware narration -----------------
         # The narrator describes a moving scene to a user who can't see — what
@@ -172,6 +232,7 @@ class OllamaVLM(ModelAdapter):
         # Lives for the whole session. The orchestrator runs only one
         # describe call at a time, so no locking is required.
         self._prev_recognized: set[str] = set()
+        self._last_seen_recognized: dict[str, float] = {}
         self._prev_unknown_count: int = 0
         self._prev_described: bool = False
 
@@ -284,12 +345,24 @@ class OllamaVLM(ModelAdapter):
             "  Changes: Mohamad in, Elie out            → 'Elie has left and Mohamad is now in front of you.'\n"
             "  Changes: 1 unrecognized person appeared  → 'Someone has just walked up to you.'\n"
             "  No changes, Recognized: Mohamad          → 'Mohamad is still in front of you.'\n"
-            "  No changes, no people                    → 'A chair sits ahead on your right.'"
+            "  No changes, no people                    → 'A chair sits ahead on your right.'\n"
+            "  Recognized: Mohamad. Objects: chair (large center), bottle (small top-right) "
+            "→ 'Mohamad is in front of you, with a chair just ahead and a bottle to your upper right.'\n"
+            "  Recognized: Mohamad. Objects: 2 chairs (large center, medium left-middle) "
+            "→ 'Mohamad is in front of you, with chairs around him.'\n\n"
+            "When 'Visible objects' is provided, treat it as ground truth — those items "
+            "ARE in the scene. If a recognized person is also present, weave them together "
+            "into ONE sentence (the person AND the most prominent 1-2 objects with their "
+            "position). Do not invent objects that are not listed."
         )
 
         dyn = dict(snap.get("dynamic", {}))
         scene_desc = (dyn.pop("scene_description", "") or "").strip()
         faces = dyn.pop("face_recognition", []) or []
+        # Object detections get formatted into a compact human-readable line
+        # below — popping here keeps the raw JSON out of "Other detections".
+        objects = dyn.pop("object_detection", []) or []
+        objects_line = _format_objects_line(objects)
 
         recognized_list = [
             f.get("person_id", "") for f in faces
@@ -298,6 +371,7 @@ class OllamaVLM(ModelAdapter):
             and f["person_id"] != "Unknown"
         ]
         recognized = sorted(set(recognized_list))   # de-dupe + stable order
+        recognized_set = set(recognized)
         unknown_count = sum(
             1 for f in faces
             if isinstance(f, dict) and f.get("person_id") == "Unknown"
@@ -307,9 +381,16 @@ class OllamaVLM(ModelAdapter):
         # Capture is_first BEFORE _prev_described is updated below so the
         # cue branch can tell "first frame of session" from "scene unchanged".
         is_first = not self._prev_described
+        now_s = time.monotonic()
+        for name in recognized_set:
+            self._last_seen_recognized[name] = now_s
         if not is_first:
-            appeared = sorted(set(recognized) - self._prev_recognized)
-            departed = sorted(self._prev_recognized - set(recognized))
+            appeared = sorted(recognized_set - self._prev_recognized)
+            departed = [
+                name for name in sorted(self._prev_recognized - recognized_set)
+                if (now_s - self._last_seen_recognized.get(name, now_s))
+                >= self.departure_grace_s
+            ]
             unknown_delta = unknown_count - self._prev_unknown_count
         else:
             # First call of the session — there is no "previous" frame to
@@ -340,6 +421,8 @@ class OllamaVLM(ModelAdapter):
         sections: list[str] = []
         if scene_desc:
             sections.append(f"Scene: {scene_desc}")
+        if objects_line:
+            sections.append(f"Visible objects: {objects_line}")
         if dyn:
             sections.append(
                 "Other detections: "
@@ -373,9 +456,13 @@ class OllamaVLM(ModelAdapter):
                 "" if is_first
                 else "Nothing has changed since the last narration. "
             )
+            obj_cue = (
+                " AND the most prominent visible object with its position"
+                if objects_line else ""
+            )
             sections.append(
                 f"{preamble}Now narrate the current scene in ONE short sentence. "
-                f"You MUST mention {', '.join(recognized)} by name."
+                f"You MUST mention {', '.join(recognized)} by name{obj_cue}."
             )
         else:
             sections.append("Now narrate the scene in ONE short sentence:")
@@ -385,7 +472,9 @@ class OllamaVLM(ModelAdapter):
         # Save state for the next describe call. Done BEFORE the HTTP call
         # so a transient Ollama failure doesn't leave us re-announcing the
         # same diff next frame.
-        self._prev_recognized = set(recognized)
+        self._prev_recognized = (self._prev_recognized | recognized_set) - set(departed)
+        for name in departed:
+            self._last_seen_recognized.pop(name, None)
         self._prev_unknown_count = unknown_count
         self._prev_described = True
 
