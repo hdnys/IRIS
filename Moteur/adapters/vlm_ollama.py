@@ -6,7 +6,7 @@ Architecture:
   a free-form scene description string (1–2 sentences). No JSON, no run_*
   flags, no orchestration metadata. The orchestrator routes the string into
   ``dynamic.scene_description`` so it lands alongside every other adapter's
-  output. Default model: ``moondream`` (~1.9 B params, built for fast VQA).
+  output. Default model: ``llava-phi3`` (~2.9 B params, fast multimodal VQA).
 
 * ``mode="describe"`` — text-only narration pass. Reads the assembled pool
   (scene description + detector outputs) and emits the user-facing string.
@@ -20,7 +20,7 @@ description (~50 generated tokens, ~250–500 ms warm).
 
 Pull both tags once::
 
-    ollama pull moondream
+    ollama pull llava-phi3
     ollama pull gemma3:1b
 
 YAML wiring::
@@ -29,7 +29,7 @@ YAML wiring::
       module: Moteur.adapters.vlm_ollama
       class:  OllamaVLM
       params:
-        model:           moondream
+        model:           llava-phi3
         model_describe:  gemma3:1b
         host:  http://127.0.0.1:11434
         keep_alive: 30m
@@ -64,14 +64,15 @@ from Moteur.adapters.base import ModelAdapter
 log = logging.getLogger(__name__)
 
 
-# Single short prompt — Moondream and Gemma both follow plain English better
-# than schema-style instructions for this kind of task.
+# Single short prompt — llava-phi3 and gemma3:1b both follow plain English
+# better than schema-style instructions for this kind of task.
 SCENE_PROMPT = (
-    "Describe what you see in 1-2 short factual sentences. "
-    "Mention people (count and what they appear to be doing), key objects, "
-    "spatial layout (left/right/center/foreground), and "
-    "(steps, traffic, obstacles). Do not give advice. Do not greet. "
-    "Output only the description."
+    "Describe the scene in 1-2 short, factual sentences for a blind user. "
+    "Use the text labels in the image to identify people and objects, but NEVER use the words 'box', 'label', 'text', or 'overlay'. "
+    "Treat the names as your inherent knowledge of who and what is present. "
+    "Identify the number of people, name them, and make educated logical deductions to describe their actions and interactions with the environment. "
+    "Note key objects and precise spatial layout (left, right, center, foreground). "
+    "Do not give advice. Do not greet. Output only the exact scene description."
 )
 
 
@@ -111,9 +112,172 @@ VERBOSITY_NUM_PREDICT = {
     "detailed": 110,
 }
 
+# Cap on the number of YOLO detections we forward to the narrator. Beyond this
+# the prompt bloats faster than gemma3:1b can absorb the structure.
+_MAX_OBJECTS_FOR_NARRATOR = 8
+
+
+def _format_objects_line(objects: list[dict]) -> str:
+    """Compact, narrator-friendly summary of YOLO detections.
+
+    Groups duplicates by label so the prompt stays short:
+
+        [{label:'chair',position:'center',size:'large'},
+         {label:'chair',position:'left-middle',size:'medium'},
+         {label:'bottle',position:'top-right',size:'small'}]
+
+    becomes::
+
+        "2 chairs (large center, medium left-middle), bottle (small top-right)"
+
+    Caller passes the adapter's already-sorted list (most-confident first), so
+    the truncation below preserves the most prominent detections.
+    """
+    if not objects:
+        return ""
+
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for obj in objects[:_MAX_OBJECTS_FOR_NARRATOR]:
+        if not isinstance(obj, dict):
+            continue
+        label = str(obj.get("label", "")).strip()
+        if not label:
+            continue
+        if label not in grouped:
+            order.append(label)
+            grouped[label] = []
+        grouped[label].append(obj)
+
+    parts: list[str] = []
+    for label in order:
+        items = grouped[label]
+        descs = [
+            f"{o.get('size','?')} {o.get('position','?')}"
+            for o in items
+        ]
+        if len(items) == 1:
+            parts.append(f"{label} ({descs[0]})")
+        else:
+            # Pluralize the simple way — "chairs" is fine for the small model;
+            # we don't need linguistic correctness for cases like "mouse".
+            parts.append(f"{len(items)} {label}s ({', '.join(descs)})")
+    return ", ".join(parts)
+
+
 # Cap on raw scene_description length — defends the narrator's prompt from
 # a runaway VLM that ignores the "1-2 sentences" instruction.
 SCENE_DESC_MAX_CHARS = 600
+
+
+def _build_personas(objects: list, faces: list) -> tuple[list[dict], list[dict]]:
+    """Match YOLO person boxes with SFace face boxes into unified Persona dicts.
+
+    Matching criterion: face bbox center falls inside the YOLO person bbox.
+    O(P × F) — negligible for typical P, F < 20.
+
+    Returns (personas, non_person_objects).
+
+    Each persona dict:
+        person_id         str            "Elie" | "Unknown"
+        face_confidence   float | None   SFace cosine score; None if unmatched
+        position          str | None     YOLO grid label ("center-middle", …)
+        size              str | None     "small" | "medium" | "large"
+        area_fraction     float | None   person-box area / frame area
+        bounding_box      dict | None    YOLO person box {x,y,width,height}
+        face_bounding_box dict | None    SFace face box; None if unmatched
+
+    Unmatched persons → persona with person_id "Unknown", no face fields.
+    Unmatched faces   → persona built from face box only (YOLO missed the body).
+    Headcount authority remains YOLO (bounding_box is not None) — unmatched
+    faces are included for identity but must not inflate the person count.
+    """
+    persons     = [o for o in objects if isinstance(o, dict) and o.get("label") == "person"]
+    non_persons = [o for o in objects if isinstance(o, dict) and o.get("label") != "person"]
+
+    matched = [False] * len(faces)
+    personas: list[dict] = []
+
+    for person in persons:
+        pbb = person.get("bounding_box", {})
+        px, py = float(pbb.get("x", 0)), float(pbb.get("y", 0))
+        pw, ph = float(pbb.get("width", 0)), float(pbb.get("height", 0))
+
+        best_idx, best_conf = -1, -1.0
+        for i, face in enumerate(faces):
+            if matched[i]:
+                continue
+            fbb = face.get("bounding_box", {})
+            cx = float(fbb.get("x", 0)) + float(fbb.get("width", 0)) / 2.0
+            cy = float(fbb.get("y", 0)) + float(fbb.get("height", 0)) / 2.0
+            if px <= cx <= px + pw and py <= cy <= py + ph:
+                conf = float(face.get("confidence", 0.0))
+                if conf > best_conf:
+                    best_conf, best_idx = conf, i
+
+        face = faces[best_idx] if best_idx >= 0 else None
+        if best_idx >= 0:
+            matched[best_idx] = True
+
+        personas.append({
+            "person_id":         face["person_id"] if face else "Unknown",
+            "face_confidence":   round(best_conf, 3) if best_idx >= 0 else None,
+            "position":          person.get("position"),
+            "size":              person.get("size"),
+            "area_fraction":     person.get("area_fraction"),
+            "bounding_box":      pbb,
+            "face_bounding_box": face.get("bounding_box") if face else None,
+        })
+
+    # Faces whose center wasn't inside any person box (YOLO body miss).
+    for i, face in enumerate(faces):
+        if not matched[i]:
+            personas.append({
+                "person_id":         face["person_id"],
+                "face_confidence":   round(float(face.get("confidence", 0.0)), 3),
+                "position":          None,
+                "size":              None,
+                "area_fraction":     None,
+                "bounding_box":      None,
+                "face_bounding_box": face.get("bounding_box"),
+            })
+
+    return personas, non_persons
+
+
+def _build_grounding(personas: list[dict], non_person_objects: list[dict]) -> str:
+    """Compact sensor-grounding block appended to SCENE_PROMPT for llava-phi3.
+
+    Tells the vision model exactly what YOLO and SFace already confirmed so it
+    can anchor its description to ground truth rather than hallucinating.
+    """
+    parts: list[str] = []
+
+    if personas:
+        named   = [p["person_id"] for p in personas if p["person_id"] != "Unknown"]
+        unknown = sum(1 for p in personas if p["person_id"] == "Unknown")
+        people: list[str] = list(named)
+        if unknown:
+            people.append(f"{unknown} unrecognized {'person' if unknown == 1 else 'people'}")
+        if people:
+            parts.append("People detected: " + ", ".join(people))
+
+    if non_person_objects:
+        obj_strs = [
+            f"{o['label']} ({o.get('size','?')}, {o.get('position','?')})"
+            for o in non_person_objects[:_MAX_OBJECTS_FOR_NARRATOR]
+        ]
+        parts.append("Objects detected: " + ", ".join(obj_strs))
+
+    if not parts:
+        return ""
+
+    return (
+        "Sensor data for this frame:\n"
+        + "\n".join(f"  {p}" for p in parts) + "\n"
+        "Only describe people and objects that appear in the sensor data above. "
+        "Do not mention anything not listed there."
+    )
 
 
 class OllamaVLM(ModelAdapter):
@@ -125,16 +289,17 @@ class OllamaVLM(ModelAdapter):
     def __init__(
         self,
         role: str,
-        model: str = "moondream",
-        model_describe: Optional[str] = "gemma3:1b",
-        host: str = "http://127.0.0.1:11434",
-        keep_alive: str = "30m",
-        timeout_s: float = 120.0,
-        max_image_side: int = 512,
-        temperature: float = 0.3,
-        num_ctx: int = 2048,
-        num_predict_static: int = 120,
-        num_predict_describe: Optional[int] = None,
+        model: str,
+        model_describe: str,
+        host: str,
+        keep_alive: str,
+        timeout_s: float,
+        max_image_side: int,
+        temperature: float,
+        num_ctx: int,
+        num_predict_static: int,
+        num_predict_describe: Optional[int],
+        departure_grace_s: float,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)
@@ -147,8 +312,8 @@ class OllamaVLM(ModelAdapter):
         self.host = host.rstrip("/")
         self.keep_alive = keep_alive
         self.timeout_s = timeout_s
-        # Moondream's vision tower works at ~378×378 internally; sending a
-        # 512-px-side image is plenty and cheaper to base64 than larger.
+        # llava-phi3's vision encoder works efficiently at ≤512 px per side;
+        # larger inputs cost more base64 without improving description quality.
         self.max_image_side = max_image_side
         self.temperature = temperature
         # 2k context fits one image (~256 tokens) + the narrator prompt with
@@ -161,18 +326,17 @@ class OllamaVLM(ModelAdapter):
         # Describe ceiling: None means "derive from the user's verbosity
         # setting at call time"; an integer forces an explicit cap.
         self.num_predict_describe = num_predict_describe
+        # A recognized person must be continuously absent this long before we
+        # narrate that they left.
+        self.departure_grace_s = max(0.0, float(departure_grace_s))
 
         # ---- Cross-frame memory for change-aware narration -----------------
-        # The narrator describes a moving scene to a user who can't see — what
-        # they actually need to hear is *what changed* ("Elie just left",
-        # "someone walked in"), not a re-description of state they already
-        # have. We keep a tiny state machine of who/what was visible at the
-        # last describe call and surface the diff in the next prompt.
-        #
-        # Lives for the whole session. The orchestrator runs only one
-        # describe call at a time, so no locking is required.
-        self._prev_recognized: set[str] = set()
-        self._prev_unknown_count: int = 0
+        # Person count is authoritative from YOLO; SFace identities are used
+        # for names only. When YOLO count is stable, identities are frozen to
+        # the last count-change event to suppress SFace flicker (same physical
+        # person getting a different label frame-to-frame).
+        self._stable_recognized: set[str] = set()   # identities locked at last YOLO count change
+        self._prev_yolo_person_count: int = -1       # -1 = uninitialized
         self._prev_described: bool = False
 
     # ------------------------------------------------------------------
@@ -215,23 +379,32 @@ class OllamaVLM(ModelAdapter):
         """
         mode = kwargs.get("mode", "static")
         if mode == "static":
-            # Static pass does not need the snapshot — see _run_static comment.
-            return self._run_static(frame)
+            return self._run_static(
+                frame,
+                objects=kwargs.get("objects"),
+                faces=kwargs.get("faces"),
+            )
         return self._run_describe(pool_snapshot)
 
     # ------------------------------------------------------------------
     # Scene-description pass (vision)
     # ------------------------------------------------------------------
 
-    def _run_static(self, frame: np.ndarray) -> str:
-        # Pool snapshot is intentionally not consumed: the simplified prompt
-        # does not condition on prior context. Scene-change detection is the
-        # capture layer's job (phash similarity), not the VLM's.
+    def _run_static(self, frame: np.ndarray,
+                    objects: Optional[list] = None,
+                    faces: Optional[list] = None) -> str:
         image_b64 = self._encode_frame(frame)
 
+        grounding = _build_grounding(objects or [], faces or [])
+        prompt = SCENE_PROMPT + ("\n\n" + grounding if grounding else "")
+
+        # ── model (self.model, e.g. llava-phi3) ─────────────────────────
+        # Receives: SCENE_PROMPT + optional sensor-grounding block (YOLO
+        #           objects + SFace people) + the JPEG frame as base64.
+        # Returns:  a raw scene-description string (no system prompt, no JSON).
         body = {
             "model": self.model,
-            "prompt": SCENE_PROMPT,
+            "prompt": prompt,
             "images": [image_b64],
             "stream": False,
             "keep_alive": self.keep_alive,
@@ -249,8 +422,8 @@ class OllamaVLM(ModelAdapter):
             return ""
 
         text = (resp.get("response") or "").strip()
-        # Defensive trim — moondream is well-behaved but a runaway model
-        # would otherwise blow up the narrator prompt.
+        # Defensive trim — a runaway model would otherwise blow up the
+        # narrator prompt.
         if len(text) > SCENE_DESC_MAX_CHARS:
             text = text[:SCENE_DESC_MAX_CHARS].rstrip() + "…"
         return text
@@ -284,39 +457,77 @@ class OllamaVLM(ModelAdapter):
             "  Changes: Mohamad in, Elie out            → 'Elie has left and Mohamad is now in front of you.'\n"
             "  Changes: 1 unrecognized person appeared  → 'Someone has just walked up to you.'\n"
             "  No changes, Recognized: Mohamad          → 'Mohamad is still in front of you.'\n"
-            "  No changes, no people                    → 'A chair sits ahead on your right.'"
+            "  No changes, no people                    → 'A chair sits ahead on your right.'\n"
+            "  Recognized: Mohamad. Objects: chair (large center), bottle (small top-right) "
+            "→ 'Mohamad is in front of you, with a chair just ahead and a bottle to your upper right.'\n"
+            "  Recognized: Mohamad. Objects: 2 chairs (large center, medium left-middle) "
+            "→ 'Mohamad is in front of you, with chairs around him.'\n\n"
+            "When 'Visible objects' is provided, treat it as ground truth — those items "
+            "ARE in the scene. If a recognized person is also present, weave them together "
+            "into ONE sentence (the person AND the most prominent 1-2 objects with their "
+            "position). Do not invent objects that are not listed."
         )
 
         dyn = dict(snap.get("dynamic", {}))
         scene_desc = (dyn.pop("scene_description", "") or "").strip()
         faces = dyn.pop("face_recognition", []) or []
+        # Object detections: split persons (headcount) from everything else
+        # (narrator objects line).  Popping keeps raw JSON out of "Other".
+        objects = dyn.pop("object_detection", []) or []
+        yolo_person_count = sum(
+            1 for o in objects
+            if isinstance(o, dict) and o.get("label") == "person"
+        )
+        objects_line = _format_objects_line(
+            [o for o in objects
+             if not (isinstance(o, dict) and o.get("label") == "person")]
+        )
 
-        recognized_list = [
+        # Current raw SFace identities — may be noisy frame-to-frame.
+        sface_recognized_set = {
             f.get("person_id", "") for f in faces
             if isinstance(f, dict)
             and f.get("person_id")
             and f["person_id"] != "Unknown"
-        ]
-        recognized = sorted(set(recognized_list))   # de-dupe + stable order
-        unknown_count = sum(
-            1 for f in faces
-            if isinstance(f, dict) and f.get("person_id") == "Unknown"
-        )
+        }
 
         # ---- Diff against the previous narration ---------------------------
-        # Capture is_first BEFORE _prev_described is updated below so the
-        # cue branch can tell "first frame of session" from "scene unchanged".
+        # YOLO person count is the authoritative headcount signal.
+        # Identity update rules (asymmetric by design):
+        #   • count changed   → reset stable to current SFace output.
+        #   • count stable, SFace has known names → accept them (known overrides
+        #     unknown AND other known — a confident recognition is always trusted).
+        #   • count stable, SFace returns only Unknown → keep existing known
+        #     identities (Unknown cannot evict a known name).
         is_first = not self._prev_described
-        if not is_first:
-            appeared = sorted(set(recognized) - self._prev_recognized)
-            departed = sorted(self._prev_recognized - set(recognized))
-            unknown_delta = unknown_count - self._prev_unknown_count
-        else:
-            # First call of the session — there is no "previous" frame to
-            # diff against. Treat everything as the initial state.
-            appeared = []
-            departed = []
-            unknown_delta = 0
+        count_changed = yolo_person_count != self._prev_yolo_person_count
+
+        appeared: list[str] = []
+        departed: list[str] = []
+        unknown_delta = 0
+
+        if is_first:
+            self._stable_recognized = sface_recognized_set
+        elif count_changed:
+            count_delta = yolo_person_count - self._prev_yolo_person_count
+            if count_delta > 0:
+                appeared = sorted(sface_recognized_set - self._stable_recognized)
+            else:
+                departed = sorted(self._stable_recognized - sface_recognized_set)
+            prev_unknown = max(0, self._prev_yolo_person_count - len(self._stable_recognized))
+            new_unknown  = max(0, yolo_person_count - len(sface_recognized_set))
+            unknown_delta = new_unknown - prev_unknown
+            self._stable_recognized = sface_recognized_set
+        elif sface_recognized_set:
+            # Count stable and SFace returned at least one known name:
+            # trust the recognition (overrides both unknown slots and stale
+            # known names). Unknown-only frames leave stable untouched.
+            self._stable_recognized = sface_recognized_set
+
+        # Narration uses the stable (YOLO-consistent) identity state.
+        recognized_set = self._stable_recognized
+        recognized    = sorted(recognized_set)
+        unknown_count = max(0, yolo_person_count - len(recognized_set))
 
         change_lines: list[str] = []
         for name in appeared:
@@ -340,6 +551,8 @@ class OllamaVLM(ModelAdapter):
         sections: list[str] = []
         if scene_desc:
             sections.append(f"Scene: {scene_desc}")
+        if objects_line:
+            sections.append(f"Visible objects: {objects_line}")
         if dyn:
             sections.append(
                 "Other detections: "
@@ -373,20 +586,22 @@ class OllamaVLM(ModelAdapter):
                 "" if is_first
                 else "Nothing has changed since the last narration. "
             )
+            obj_cue = (
+                " AND the most prominent visible object with its position"
+                if objects_line else ""
+            )
             sections.append(
                 f"{preamble}Now narrate the current scene in ONE short sentence. "
-                f"You MUST mention {', '.join(recognized)} by name."
+                f"You MUST mention {', '.join(recognized)} by name{obj_cue}."
             )
         else:
             sections.append("Now narrate the scene in ONE short sentence:")
 
         prompt = "\n\n".join(sections)
 
-        # Save state for the next describe call. Done BEFORE the HTTP call
-        # so a transient Ollama failure doesn't leave us re-announcing the
-        # same diff next frame.
-        self._prev_recognized = set(recognized)
-        self._prev_unknown_count = unknown_count
+        # Save state before the HTTP call so a transient Ollama failure
+        # doesn't leave us re-announcing the same diff next frame.
+        self._prev_yolo_person_count = yolo_person_count
         self._prev_described = True
 
         # Cap describe length: explicit override > verbosity preset.
@@ -396,9 +611,13 @@ class OllamaVLM(ModelAdapter):
             else VERBOSITY_NUM_PREDICT.get(verbosity, VERBOSITY_NUM_PREDICT["standard"])
         )
 
+        # ── model_describe (self.model_describe, e.g. gemma3:1b) ────────
+        # Receives: system = IRIS narrator persona + verbosity/language rules
+        #           prompt = assembled pool sections (scene desc, YOLO objects,
+        #                    recognized names, changes diff, generation cue)
+        # No image — text-only; the scene description from self.model feeds in
+        # via the "Scene: …" section of prompt.
         body = {
-            # Describe runs on the smaller text-only model — no vision tower
-            # to load, far less compute per generated token.
             "model": self.model_describe,
             "prompt": prompt,
             "system": system,

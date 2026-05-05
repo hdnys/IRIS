@@ -48,7 +48,9 @@ class Orchestrator:
         # network-bound — also fine on threads.
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    def process_frame(self, frame: Any) -> Optional[str]:
+    def process_frame(self, frame: Any,
+                      objects: Optional[list] = None,
+                      faces: Optional[list] = None) -> Optional[str]:
         """Run one full pass on a single frame. Returns the narration string, or None.
 
         ``frame`` is whatever the capture layer hands us — typically an
@@ -68,7 +70,7 @@ class Orchestrator:
         # Phase 2: parallel dispatch. Blocks until every submitted adapter
         # finishes (or raises). No timeout enforced here — add one at the
         # adapter level once we know real-world latencies.
-        self._dispatch_parallel(frame, frame_id)
+        self._dispatch_parallel(frame, frame_id, objects=objects, faces=faces)
 
         # Phase 3: validate. Caught broadly because we deliberately want
         # the narrator pass to run even on partial data — better a degraded
@@ -97,7 +99,9 @@ class Orchestrator:
     # Internal pipeline steps
     # ------------------------------------------------------------------
 
-    def _dispatch_parallel(self, frame: Any, frame_id: str) -> None:
+    def _dispatch_parallel(self, frame: Any, frame_id: str,
+                           objects: Optional[list] = None,
+                           faces: Optional[list] = None) -> None:
         """Submit VLM scene + every other adapter to the executor concurrently.
 
         No gating: every configured non-VLM adapter runs every frame. The cost
@@ -113,12 +117,27 @@ class Orchestrator:
             self.events.emit("error", "no VLM adapter registered")
         else:
             futures[self._executor.submit(
-                self._run_vlm_scene, vlm, frame, snap, frame_id
+                self._run_vlm_scene, vlm, frame, snap, frame_id, objects, faces
             )] = "vlm_scene"
 
         # Every other registered adapter — runs in parallel with the VLM.
+        # If pre-computed results were supplied by the caller (live pipeline
+        # already ran SFace + YOLO for display), write them straight into the
+        # pool and skip re-running the adapter.  This prevents double-running
+        # ONNX models that are already busy on the main thread, which was the
+        # cause of the 1-second display freeze on inference trigger.
         for role, adapter in self.registry.all().items():
             if role == "vlm":
+                continue
+            if role == "face_recognition" and faces is not None:
+                self.pool.update_dynamic("face_recognition", faces, frame_id)
+                self.pool.update_meta(role, type(adapter).__name__, 0.0, "precomputed",
+                                      version=getattr(adapter, "version", ""))
+                continue
+            if role == "object_detection" and objects is not None:
+                self.pool.update_dynamic("object_detection", objects, frame_id)
+                self.pool.update_meta(role, type(adapter).__name__, 0.0, "precomputed",
+                                      version=getattr(adapter, "version", ""))
                 continue
             futures[self._executor.submit(
                 self._run_adapter, adapter, role, frame, snap, frame_id
@@ -132,7 +151,9 @@ class Orchestrator:
 
         self.events.emit("dynamic_complete", self.pool.snapshot()["dynamic"])
 
-    def _run_vlm_scene(self, vlm: Any, frame: Any, snapshot: dict, frame_id: str) -> None:
+    def _run_vlm_scene(self, vlm: Any, frame: Any, snapshot: dict, frame_id: str,
+                       objects: Optional[list] = None,
+                       faces: Optional[list] = None) -> None:
         """Run the VLM in static mode and route its string output to the pool.
 
         The static mode now returns just a scene-description string (see
@@ -145,7 +166,8 @@ class Orchestrator:
         t0 = time.time()
         status = "ok"
         try:
-            scene_desc = vlm.run(frame, snapshot, mode="static")
+            scene_desc = vlm.run(frame, snapshot, mode="static",
+                                  objects=objects, faces=faces)
             # Defensive: an adapter that returns a dict (older contract) or
             # None should not break the pool. Coerce to str.
             if not isinstance(scene_desc, str):

@@ -8,6 +8,10 @@ jsonschema
 # opencv-python-headless on a server / headless environment.
 opencv-python
 
+# ── Object detection (YOLO, Ultralytics) ─────────────────────────────────────
+# Pulls torch as a transitive dependency.
+ultralytics
+
 # ── Face recognition ─────────────────────────────────────────────────────────
 # Requires CMake + a C++ compiler (on Windows: Visual Studio Build Tools).
 # Install dlib first if the wheel isn't pre-built for your Python version:
