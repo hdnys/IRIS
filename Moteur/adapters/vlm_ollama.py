@@ -170,81 +170,6 @@ def _format_objects_line(objects: list[dict]) -> str:
 SCENE_DESC_MAX_CHARS = 600
 
 
-def _build_personas(objects: list, faces: list) -> tuple[list[dict], list[dict]]:
-    """Match YOLO person boxes with SFace face boxes into unified Persona dicts.
-
-    Matching criterion: face bbox center falls inside the YOLO person bbox.
-    O(P × F) — negligible for typical P, F < 20.
-
-    Returns (personas, non_person_objects).
-
-    Each persona dict:
-        person_id         str            "Elie" | "Unknown"
-        face_confidence   float | None   SFace cosine score; None if unmatched
-        position          str | None     YOLO grid label ("center-middle", …)
-        size              str | None     "small" | "medium" | "large"
-        area_fraction     float | None   person-box area / frame area
-        bounding_box      dict | None    YOLO person box {x,y,width,height}
-        face_bounding_box dict | None    SFace face box; None if unmatched
-
-    Unmatched persons → persona with person_id "Unknown", no face fields.
-    Unmatched faces   → persona built from face box only (YOLO missed the body).
-    Headcount authority remains YOLO (bounding_box is not None) — unmatched
-    faces are included for identity but must not inflate the person count.
-    """
-    persons     = [o for o in objects if isinstance(o, dict) and o.get("label") == "person"]
-    non_persons = [o for o in objects if isinstance(o, dict) and o.get("label") != "person"]
-
-    matched = [False] * len(faces)
-    personas: list[dict] = []
-
-    for person in persons:
-        pbb = person.get("bounding_box", {})
-        px, py = float(pbb.get("x", 0)), float(pbb.get("y", 0))
-        pw, ph = float(pbb.get("width", 0)), float(pbb.get("height", 0))
-
-        best_idx, best_conf = -1, -1.0
-        for i, face in enumerate(faces):
-            if matched[i]:
-                continue
-            fbb = face.get("bounding_box", {})
-            cx = float(fbb.get("x", 0)) + float(fbb.get("width", 0)) / 2.0
-            cy = float(fbb.get("y", 0)) + float(fbb.get("height", 0)) / 2.0
-            if px <= cx <= px + pw and py <= cy <= py + ph:
-                conf = float(face.get("confidence", 0.0))
-                if conf > best_conf:
-                    best_conf, best_idx = conf, i
-
-        face = faces[best_idx] if best_idx >= 0 else None
-        if best_idx >= 0:
-            matched[best_idx] = True
-
-        personas.append({
-            "person_id":         face["person_id"] if face else "Unknown",
-            "face_confidence":   round(best_conf, 3) if best_idx >= 0 else None,
-            "position":          person.get("position"),
-            "size":              person.get("size"),
-            "area_fraction":     person.get("area_fraction"),
-            "bounding_box":      pbb,
-            "face_bounding_box": face.get("bounding_box") if face else None,
-        })
-
-    # Faces whose center wasn't inside any person box (YOLO body miss).
-    for i, face in enumerate(faces):
-        if not matched[i]:
-            personas.append({
-                "person_id":         face["person_id"],
-                "face_confidence":   round(float(face.get("confidence", 0.0)), 3),
-                "position":          None,
-                "size":              None,
-                "area_fraction":     None,
-                "bounding_box":      None,
-                "face_bounding_box": face.get("bounding_box"),
-            })
-
-    return personas, non_persons
-
-
 def _build_grounding(personas: list[dict], non_person_objects: list[dict]) -> str:
     """Compact sensor-grounding block appended to SCENE_PROMPT for llava-phi3.
 
@@ -379,28 +304,27 @@ class OllamaVLM(ModelAdapter):
         """
         mode = kwargs.get("mode", "static")
         if mode == "static":
-            return self._run_static(
-                frame,
-                objects=kwargs.get("objects"),
-                faces=kwargs.get("faces"),
-            )
+            return self._run_static(frame, pool_snapshot)
         return self._run_describe(pool_snapshot)
 
     # ------------------------------------------------------------------
     # Scene-description pass (vision)
     # ------------------------------------------------------------------
 
-    def _run_static(self, frame: np.ndarray,
-                    objects: Optional[list] = None,
-                    faces: Optional[list] = None) -> str:
+    def _run_static(self, frame: np.ndarray, snap: dict) -> str:
         image_b64 = self._encode_frame(frame)
 
-        grounding = _build_grounding(objects or [], faces or [])
+        # Read personas and non-person objects from the pool — already built
+        # by the orchestrator's persona synthesis step before this call.
+        dyn = snap.get("dynamic", {})
+        personas = dyn.get("personas", []) or []
+        objects  = dyn.get("object_detection", []) or []
+        grounding = _build_grounding(personas, objects)
         prompt = SCENE_PROMPT + ("\n\n" + grounding if grounding else "")
 
         # ── model (self.model, e.g. llava-phi3) ─────────────────────────
-        # Receives: SCENE_PROMPT + optional sensor-grounding block (YOLO
-        #           objects + SFace people) + the JPEG frame as base64.
+        # Receives: SCENE_PROMPT + sensor-grounding block (personas + YOLO
+        #           non-person objects) + the JPEG frame as base64.
         # Returns:  a raw scene-description string (no system prompt, no JSON).
         body = {
             "model": self.model,
@@ -434,7 +358,6 @@ class OllamaVLM(ModelAdapter):
 
     def _run_describe(self, snap: dict) -> Optional[str]:
         profile = snap.get("user_profile", {})
-        vision = profile.get("vision_profile", "low_vision")
         verbosity = profile.get("verbosity", "standard")
         language = profile.get("preferred_language", "en-US")
 
@@ -470,25 +393,24 @@ class OllamaVLM(ModelAdapter):
 
         dyn = dict(snap.get("dynamic", {}))
         scene_desc = (dyn.pop("scene_description", "") or "").strip()
-        faces = dyn.pop("face_recognition", []) or []
-        # Object detections: split persons (headcount) from everything else
-        # (narrator objects line).  Popping keeps raw JSON out of "Other".
-        objects = dyn.pop("object_detection", []) or []
-        yolo_person_count = sum(
-            1 for o in objects
-            if isinstance(o, dict) and o.get("label") == "person"
-        )
-        objects_line = _format_objects_line(
-            [o for o in objects
-             if not (isinstance(o, dict) and o.get("label") == "person")]
-        )
+        # Personas were built by the orchestrator (Phase 2.5) from face_recognition
+        # + object_detection. object_detection now contains non-person objects only.
+        personas = dyn.pop("personas", []) or []
+        objects  = dyn.pop("object_detection", []) or []
+        dyn.pop("face_recognition", None)  # cleared by orchestrator; drop from "Other"
 
-        # Current raw SFace identities — may be noisy frame-to-frame.
+        # Headcount is YOLO-only — unmatched SFace faces (bounding_box is None)
+        # must not inflate it.
+        yolo_person_count = sum(
+            1 for p in personas
+            if p.get("bounding_box") is not None
+        )
+        objects_line = _format_objects_line(objects)
+
+        # Current raw SFace identities drawn from personas — noisy frame-to-frame.
         sface_recognized_set = {
-            f.get("person_id", "") for f in faces
-            if isinstance(f, dict)
-            and f.get("person_id")
-            and f["person_id"] != "Unknown"
+            p["person_id"] for p in personas
+            if p["person_id"] and p["person_id"] != "Unknown"
         }
 
         # ---- Diff against the previous narration ---------------------------
@@ -526,8 +448,7 @@ class OllamaVLM(ModelAdapter):
 
         # Narration uses the stable (YOLO-consistent) identity state.
         recognized_set = self._stable_recognized
-        recognized    = sorted(recognized_set)
-        unknown_count = max(0, yolo_person_count - len(recognized_set))
+        recognized     = sorted(recognized_set)
 
         change_lines: list[str] = []
         for name in appeared:
@@ -559,12 +480,25 @@ class OllamaVLM(ModelAdapter):
                 f"{json.dumps(dyn, ensure_ascii=False, default=str)}"
             )
 
-        if recognized:
-            sections.append("People currently in view: " + ", ".join(recognized))
-        if unknown_count and not recognized:
-            sections.append(f"Unrecognized people in view: {unknown_count}")
-        elif unknown_count:
-            sections.append(f"Plus {unknown_count} unrecognized.")
+        # Build a spatially-rich people line from personas.
+        # Names come from the stable recognized_set; YOLO-backed personas supply
+        # position + size. Names not matched to any persona are listed without
+        # position (YOLO missed the body but identity is known from stability).
+        if yolo_person_count > 0:
+            yolo_personas = [p for p in personas if p.get("bounding_box") is not None]
+            covered_names: set[str] = set()
+            person_descs: list[str] = []
+            for p in yolo_personas:
+                name = p["person_id"] if p["person_id"] in recognized_set else "Unknown"
+                if name in recognized_set:
+                    covered_names.add(name)
+                pos  = p.get("position") or ""
+                size = p.get("size") or ""
+                info = ", ".join(x for x in [size, pos] if x)
+                person_descs.append(f"{name} ({info})" if info else name)
+            for name in sorted(recognized_set - covered_names):
+                person_descs.append(name)
+            sections.append("People in view: " + ", ".join(person_descs))
 
         if change_lines:
             sections.append(

@@ -4,19 +4,25 @@ This is the only component that knows the order of operations. Per frame:
 
   1. Begin frame             — stamp the pool with frame_id + timestamp and
                               clear last frame's dynamic state.
-  2. Parallel fan-out        — VLM scene-description + every dynamic adapter
-                              are dispatched concurrently to the same thread
-                              pool. They write into ``dynamic[role]``;
-                              ``update_dynamic`` gates on frame_id so stale
-                              outputs are dropped.
+  2a. Detector fan-out       — face_recognition + object_detection (and any
+                              other non-VLM adapters) run in parallel.
+                              Pre-computed results from the live pipeline are
+                              written directly to avoid double-running ONNX.
+  2b. Persona synthesis      — YOLO person boxes and SFace faces are merged
+                              into ``dynamic.personas``; ``object_detection``
+                              is replaced with non-person objects only;
+                              ``face_recognition`` is cleared.
+  2c. VLM static pass        — llava-phi3 receives the frame + a grounding
+                              block built from ``dynamic.personas`` and the
+                              cleaned ``dynamic.object_detection``, so it
+                              always sees the same fused data as the narrator.
   3. Schema validation       — assembled context is validated; failures are
                               logged via the EventBus but do not abort.
-  4. Narrator pass           — text-only LLM reads the assembled pool and
-                              emits the user-facing string.
+  4. Narrator pass           — gemma3:1b reads the assembled pool and emits
+                              the user-facing string.
 
-Steps 2 and 4 are sequential because the narrator needs the full pool. Step
-2 is embarrassingly parallel: the VLM scene call and the dynamic adapters
-write to disjoint dynamic.* keys.
+2a is parallel; 2b and 2c are sequential because the VLM needs finished
+persona data. 4 is sequential because the narrator needs the full pool.
 """
 from __future__ import annotations
 
@@ -26,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 from Moteur.core.events import EventBus
+from Moteur.core.personas import build_personas
 from Moteur.core.pool import DataPool
 from Moteur.core.registry import AdapterRegistry
 
@@ -67,10 +74,14 @@ class Orchestrator:
         # Phase 1: stamp the pool so all parallel writes target this frame.
         self.pool.begin_frame(frame_id, ts)
 
-        # Phase 2: parallel dispatch. Blocks until every submitted adapter
-        # finishes (or raises). No timeout enforced here — add one at the
-        # adapter level once we know real-world latencies.
-        self._dispatch_parallel(frame, frame_id, objects=objects, faces=faces)
+        # Phase 2a: detectors — face_recognition + object_detection in parallel.
+        self._dispatch_detectors(frame, frame_id, objects=objects, faces=faces)
+
+        # Phase 2b: persona synthesis — must finish before the VLM runs.
+        self._synthesise_personas(frame_id)
+
+        # Phase 2c: VLM static — grounding now reads pool personas directly.
+        self._run_vlm_scene(frame, frame_id)
 
         # Phase 3: validate. Caught broadly because we deliberately want
         # the narrator pass to run even on partial data — better a degraded
@@ -99,33 +110,18 @@ class Orchestrator:
     # Internal pipeline steps
     # ------------------------------------------------------------------
 
-    def _dispatch_parallel(self, frame: Any, frame_id: str,
-                           objects: Optional[list] = None,
-                           faces: Optional[list] = None) -> None:
-        """Submit VLM scene + every other adapter to the executor concurrently.
+    def _dispatch_detectors(self, frame: Any, frame_id: str,
+                            objects: Optional[list] = None,
+                            faces: Optional[list] = None) -> None:
+        """Phase 2a: run all non-VLM adapters in parallel and wait for them.
 
-        No gating: every configured non-VLM adapter runs every frame. The cost
-        of always-running stubs is negligible; when real adapters land they
-        should be cheap enough to keep this true (or short-circuit themselves).
+        Pre-computed results (live pipeline passes faces + objects directly)
+        are written to the pool immediately, skipping the adapter re-run to
+        avoid ONNX contention on the main thread.
         """
         snap = self.pool.snapshot()
         futures: dict = {}
 
-        # VLM scene-description call (uses the image).
-        vlm = self.registry.get("vlm")
-        if vlm is None:
-            self.events.emit("error", "no VLM adapter registered")
-        else:
-            futures[self._executor.submit(
-                self._run_vlm_scene, vlm, frame, snap, frame_id, objects, faces
-            )] = "vlm_scene"
-
-        # Every other registered adapter — runs in parallel with the VLM.
-        # If pre-computed results were supplied by the caller (live pipeline
-        # already ran SFace + YOLO for display), write them straight into the
-        # pool and skip re-running the adapter.  This prevents double-running
-        # ONNX models that are already busy on the main thread, which was the
-        # cause of the 1-second display freeze on inference trigger.
         for role, adapter in self.registry.all().items():
             if role == "vlm":
                 continue
@@ -143,33 +139,26 @@ class Orchestrator:
                 self._run_adapter, adapter, role, frame, snap, frame_id
             )] = role
 
-        # Wait for everyone. We don't collect return values — each task
-        # writes directly into the pool. as_completed is used (vs wait()) so
-        # we can later add per-future timeout handling without restructuring.
         for _ in as_completed(futures):
             pass
 
-        self.events.emit("dynamic_complete", self.pool.snapshot()["dynamic"])
+    def _run_vlm_scene(self, frame: Any, frame_id: str) -> None:
+        """Phase 2c: VLM static pass — reads personas from pool for grounding.
 
-    def _run_vlm_scene(self, vlm: Any, frame: Any, snapshot: dict, frame_id: str,
-                       objects: Optional[list] = None,
-                       faces: Optional[list] = None) -> None:
-        """Run the VLM in static mode and route its string output to the pool.
-
-        The static mode now returns just a scene-description string (see
-        ``Moteur.adapters.vlm_ollama``). We write it to
-        ``dynamic.scene_description`` so it sits alongside every other
-        adapter's output and the narrator can read it the same way it reads
-        anything else. Same boundary semantics as ``_run_adapter``: must NOT
-        raise. All exceptions become ``status="error:..."`` in model_meta.
+        Runs after persona synthesis so the grounding block seen by llava-phi3
+        matches exactly what the narrator will read from the pool. Must NOT
+        raise — exceptions become status="error:..." in model_meta.
         """
+        vlm = self.registry.get("vlm")
+        if vlm is None:
+            self.events.emit("error", "no VLM adapter registered")
+            return
+
+        snap = self.pool.snapshot()
         t0 = time.time()
         status = "ok"
         try:
-            scene_desc = vlm.run(frame, snapshot, mode="static",
-                                  objects=objects, faces=faces)
-            # Defensive: an adapter that returns a dict (older contract) or
-            # None should not break the pool. Coerce to str.
+            scene_desc = vlm.run(frame, snap, mode="static")
             if not isinstance(scene_desc, str):
                 scene_desc = "" if scene_desc is None else str(scene_desc)
             if scene_desc:
@@ -207,6 +196,25 @@ class Orchestrator:
         self.pool.update_meta(role, type(adapter).__name__,
                               (time.time() - t0) * 1000.0, status,
                               version=getattr(adapter, "version", ""))
+
+    def _synthesise_personas(self, frame_id: str) -> None:
+        """Phase 2.5: merge YOLO persons + SFace faces into dynamic.personas.
+
+        After this step:
+          • dynamic.personas        — list of Persona dicts (see core.personas)
+          • dynamic.object_detection — non-person objects only
+          • dynamic.face_recognition — cleared (data now lives in personas)
+        """
+        snap = self.pool.snapshot()
+        dyn  = snap.get("dynamic", {})
+        objects = dyn.get("object_detection", []) or []
+        faces   = dyn.get("face_recognition",  []) or []
+
+        personas, non_person_objects = build_personas(objects, faces)
+
+        self.pool.update_dynamic("personas",         personas,           frame_id)
+        self.pool.update_dynamic("object_detection", non_person_objects, frame_id)
+        self.pool.update_dynamic("face_recognition", [],                 frame_id)
 
     def _run_narrator(self, frame_id: str) -> Optional[str]:
         """Phase 4: VLM in describe mode. Generates the user-facing string.
