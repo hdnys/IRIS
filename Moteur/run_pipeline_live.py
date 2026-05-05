@@ -1,7 +1,7 @@
 """Live IRIS pipeline driven by the laptop webcam.
 
 Reads frames from the camera at native FPS, runs the configured adapter
-stack (Ollama VLM + SFace + objdet stub) on the latest frame in a worker
+stack (Ollama VLM + SFace + YOLO) on the latest frame in a worker
 thread, and speaks the narration through TTS.
 
 Inference is gated by a multi-signal :class:`SceneGate` (see
@@ -58,6 +58,7 @@ _GREEN = (0, 200, 0)
 _RED   = (0, 0, 220)
 _WHITE = (255, 255, 255)
 _BLACK = (0, 0, 0)
+_OBJ   = (255, 200, 0)   # cyan-ish for object boxes (BGR)
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +80,9 @@ class TTSWorker(threading.Thread):
         self._enabled = enabled
         self._queue: queue.Queue[Optional[str]] = queue.Queue()
         self._busy = threading.Event()
-        self._stop = threading.Event()
+        # Note: cannot use `_stop` — it shadows threading.Thread._stop and
+        # crashes on join() with `Event object is not callable`.
+        self._stop_evt = threading.Event()
         self._last_spoken = ""
 
     def speak(self, text: str) -> None:
@@ -97,7 +100,7 @@ class TTSWorker(threading.Thread):
         return self._busy.is_set() or not self._queue.empty()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
         self._queue.put(None)
 
     def run(self) -> None:
@@ -115,9 +118,9 @@ class TTSWorker(threading.Thread):
             return
 
         try:
-            while not self._stop.is_set():
+            while not self._stop_evt.is_set():
                 text = self._queue.get()
-                if text is None or self._stop.is_set():
+                if text is None or self._stop_evt.is_set():
                     break
                 self._busy.set()
                 self._last_spoken = text
@@ -174,7 +177,8 @@ class GateWorker(threading.Thread):
         self._latest_signals: Optional[GateSignals] = None
         self._lock = threading.Lock()
         self._wakeup = threading.Event()
-        self._stop = threading.Event()
+        # See TTSWorker note — never name this `_stop`.
+        self._stop_evt = threading.Event()
 
     def submit(self, frame: np.ndarray, faces: Optional[list] = None) -> None:
         with self._lock:
@@ -193,14 +197,14 @@ class GateWorker(threading.Thread):
             self._gate.commit(sig)
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
         self._wakeup.set()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             self._wakeup.wait()
             self._wakeup.clear()
-            if self._stop.is_set():
+            if self._stop_evt.is_set():
                 break
             with self._lock:
                 pending = self._pending
@@ -218,6 +222,60 @@ class GateWorker(threading.Thread):
 
 
 # ---------------------------------------------------------------------------
+# Live object-detection worker
+# ---------------------------------------------------------------------------
+
+class ObjDetWorker(threading.Thread):
+    """Runs the YOLO adapter async on submitted frames.
+
+    Same submit-latest-only pattern as :class:`GateWorker`: a new submission
+    overwrites any pending un-evaluated frame, so the worker always processes
+    the freshest pixels and the main display loop never blocks on YOLO.
+    """
+
+    def __init__(self, adapter) -> None:
+        super().__init__(daemon=True, name="iris-objdet")
+        self._adapter = adapter
+        self._pending: Optional[np.ndarray] = None
+        self._latest: list[dict] = []
+        self._lock = threading.Lock()
+        self._wakeup = threading.Event()
+        self._stop_evt = threading.Event()
+
+    def submit(self, frame: np.ndarray) -> None:
+        with self._lock:
+            self._pending = frame
+        self._wakeup.set()
+
+    def latest_objects(self) -> list[dict]:
+        with self._lock:
+            return list(self._latest)
+
+    def stop(self) -> None:
+        self._stop_evt.set()
+        self._wakeup.set()
+
+    def run(self) -> None:
+        while not self._stop_evt.is_set():
+            self._wakeup.wait()
+            self._wakeup.clear()
+            if self._stop_evt.is_set():
+                break
+            with self._lock:
+                frame = self._pending
+                self._pending = None
+            if frame is None:
+                continue
+            try:
+                objs = self._adapter.run(frame, {}) or []
+            except Exception as e:
+                print(f"[objdet error] {e}")
+                continue
+            with self._lock:
+                self._latest = objs
+
+
+# ---------------------------------------------------------------------------
 # Inference worker
 # ---------------------------------------------------------------------------
 
@@ -231,7 +289,8 @@ class InferenceWorker(threading.Thread):
         self._latest_result: Optional[dict] = None
         self._lock = threading.Lock()
         self._busy = threading.Event()
-        self._stop = threading.Event()
+        # See TTSWorker note — never name this `_stop`.
+        self._stop_evt = threading.Event()
         self._wakeup = threading.Event()
 
     def submit(self, frame: np.ndarray) -> None:
@@ -247,14 +306,14 @@ class InferenceWorker(threading.Thread):
             return self._latest_result
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_evt.set()
         self._wakeup.set()
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_evt.is_set():
             self._wakeup.wait()
             self._wakeup.clear()
-            if self._stop.is_set():
+            if self._stop_evt.is_set():
                 break
             with self._lock:
                 frame = self._pending_frame
@@ -327,11 +386,40 @@ def draw_face_boxes(frame: np.ndarray, faces: Optional[list]) -> np.ndarray:
     return out
 
 
+def draw_object_boxes(frame: np.ndarray, objects: Optional[list]) -> np.ndarray:
+    """Overlay YOLO detection boxes from the latest inference result.
+
+    Boxes lag the live camera by one inference cycle (the orchestrator runs
+    them on the gated frame, not on every captured one). That's an acceptable
+    trade against the cost of running YOLO synchronously per frame.
+    """
+    out = frame.copy()
+    if not objects:
+        return out
+
+    for o in objects:
+        bb = o.get("bounding_box", {})
+        x = int(bb.get("x", 0)); y = int(bb.get("y", 0))
+        ow = int(bb.get("width", 0)); oh = int(bb.get("height", 0))
+        if ow <= 0 or oh <= 0:
+            continue
+        label = o.get("label", "?")
+        conf = o.get("confidence", 0.0)
+        cv2.rectangle(out, (x, y), (x + ow, y + oh), _OBJ, 2)
+        text = f"{label} {conf:.2f}"
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(out, (x, max(0, y - th - 6)), (x + tw + 4, y), _OBJ, -1)
+        cv2.putText(out, text, (x + 2, max(th, y - 3)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, _BLACK, 1)
+    return out
+
+
 def draw_overlay(frame: np.ndarray, result: Optional[dict],
                  cam_fps: float, infer_busy: bool, tts_busy: bool,
                  signals: Optional[GateSignals],
                  trigger_score: float,
-                 live_faces: Optional[list] = None) -> np.ndarray:
+                 live_faces: Optional[list] = None,
+                 live_objects: Optional[list] = None) -> np.ndarray:
     # Draw the freshest face data we have. ``live_faces`` is the SFace
     # output computed on the current frame in the main loop — drawing those
     # boxes keeps them locked to the user's actual head. The previous
@@ -342,7 +430,13 @@ def draw_overlay(frame: np.ndarray, result: Optional[dict],
     faces_to_draw = live_faces if live_faces is not None else (
         result.get("faces", []) if result else []
     )
-    out = draw_face_boxes(frame, faces_to_draw)
+    # Prefer the live YOLO worker's freshest output; fall back to the lagged
+    # inference result only if the live worker hasn't produced anything yet.
+    objects_to_draw = live_objects if live_objects is not None else (
+        result.get("objects", []) if result else []
+    )
+    out = draw_object_boxes(frame, objects_to_draw)
+    out = draw_face_boxes(out, faces_to_draw)
     h, w = out.shape[:2]
 
     state = []
@@ -374,6 +468,17 @@ def draw_overlay(frame: np.ndarray, result: Optional[dict],
         if scene:
             short = scene if len(scene) <= 70 else scene[:70] + "…"
             hud.append(f"scene   : {short}")
+        objs = (live_objects if live_objects is not None
+                else (result.get("objects", []) or []))
+        if objs:
+            # Top-3 most-confident detections, condensed.
+            top = ", ".join(
+                f"{o.get('label','?')}({o.get('confidence',0):.2f},"
+                f"{o.get('position','?')},{o.get('size','?')})"
+                for o in objs[:3]
+            )
+            extra = "" if len(objs) <= 3 else f" +{len(objs) - 3}"
+            hud.append(f"objs({len(objs)}): {top}{extra}")
 
     for i, line in enumerate(hud):
         y = 22 + i * 22
@@ -513,7 +618,8 @@ def main() -> None:
     tts          = TTSWorker(rate=args.tts_rate, enabled=not args.no_tts)
     gate_worker  = GateWorker(gate)
     infer_worker = InferenceWorker(orch)
-    tts.start(); gate_worker.start(); infer_worker.start()
+    od_worker    = ObjDetWorker(registry.get("object_detection"))
+    tts.start(); gate_worker.start(); infer_worker.start(); od_worker.start()
 
     use_gate = not args.no_gate
     trigger_score = float(cfg.get("scene_gate", {}).get("trigger_score", 0.20))
@@ -577,7 +683,9 @@ def main() -> None:
                 live_faces = []
 
             gate_worker.submit(frame, faces=live_faces)
+            od_worker.submit(frame)
             signals = gate_worker.latest_signals()
+            live_objects = od_worker.latest_objects()
 
             should_submit = (
                 not infer_worker.is_busy()
@@ -616,6 +724,7 @@ def main() -> None:
                 infer_worker.is_busy(), tts.is_busy(),
                 signals, trigger_score,
                 live_faces=live_faces,
+                live_objects=live_objects,
             )
             cv2.imshow("IRIS — live pipeline", display)
             if show_pool and last_pool_img is not None:
@@ -650,6 +759,7 @@ def main() -> None:
         print("\nShutting down…")
         infer_worker.stop(); infer_worker.join(timeout=2.0)
         gate_worker.stop();  gate_worker.join(timeout=2.0)
+        od_worker.stop();    od_worker.join(timeout=2.0)
         tts.stop();          tts.join(timeout=2.0)
         cap.release()
         cv2.destroyAllWindows()

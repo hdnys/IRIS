@@ -62,9 +62,9 @@ class AdapterRegistry:
                 class:  VLMStub
                 params: {}
               object_detection:
-                module: Moteur.adapters.objdet_stub
-                class:  ObjDetStub
-                params: {model_path: "..."}
+                module: Moteur.adapters.objdet_yolo
+                class:  YoloObjectDetector
+                params: {weights_path: "models/yolo12n.pt"}
 
         ``params`` is forwarded to the adapter constructor as kwargs. Each
         adapter's ``load()`` runs immediately after construction so that

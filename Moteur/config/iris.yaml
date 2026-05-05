@@ -24,9 +24,17 @@ adapters:
     #     device: cuda
     #     dtype: float16
   object_detection:
-    module: Moteur.adapters.objdet_stub
-    class: ObjDetStub
-    params: {}
+    module: Moteur.adapters.objdet_yolo
+    class:  YoloObjectDetector
+    params:
+      weights_path:    models/yolo12n.pt
+      conf_threshold:  0.25
+      iou_threshold:   0.45
+      max_image_side:  640
+      keep_classes:    null    # e.g. [2, 56] = car/chair only (whitelist)
+      exclude_classes: [0]     # drop persons — SFace already covers them
+      device:          null    # null = let ultralytics auto-pick (cpu/mps/cuda)
+      verbose:         false
   face_recognition:
     module: Moteur.adapters.face_sface
     class:  SFaceAdapter

@@ -114,6 +114,59 @@ VERBOSITY_NUM_PREDICT = {
     "detailed": 110,
 }
 
+# Cap on the number of YOLO detections we forward to the narrator. Beyond this
+# the prompt bloats faster than gemma3:1b can absorb the structure.
+_MAX_OBJECTS_FOR_NARRATOR = 8
+
+
+def _format_objects_line(objects: list[dict]) -> str:
+    """Compact, narrator-friendly summary of YOLO detections.
+
+    Groups duplicates by label so the prompt stays short:
+
+        [{label:'chair',position:'center',size:'large'},
+         {label:'chair',position:'left-middle',size:'medium'},
+         {label:'bottle',position:'top-right',size:'small'}]
+
+    becomes::
+
+        "2 chairs (large center, medium left-middle), bottle (small top-right)"
+
+    Caller passes the adapter's already-sorted list (most-confident first), so
+    the truncation below preserves the most prominent detections.
+    """
+    if not objects:
+        return ""
+
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for obj in objects[:_MAX_OBJECTS_FOR_NARRATOR]:
+        if not isinstance(obj, dict):
+            continue
+        label = str(obj.get("label", "")).strip()
+        if not label:
+            continue
+        if label not in grouped:
+            order.append(label)
+            grouped[label] = []
+        grouped[label].append(obj)
+
+    parts: list[str] = []
+    for label in order:
+        items = grouped[label]
+        descs = [
+            f"{o.get('size','?')} {o.get('position','?')}"
+            for o in items
+        ]
+        if len(items) == 1:
+            parts.append(f"{label} ({descs[0]})")
+        else:
+            # Pluralize the simple way — "chairs" is fine for the small model;
+            # we don't need linguistic correctness for cases like "mouse".
+            parts.append(f"{len(items)} {label}s ({', '.join(descs)})")
+    return ", ".join(parts)
+
+
 # Cap on raw scene_description length — defends the narrator's prompt from
 # a runaway VLM that ignores the "1-2 sentences" instruction.
 SCENE_DESC_MAX_CHARS = 600
@@ -292,12 +345,24 @@ class OllamaVLM(ModelAdapter):
             "  Changes: Mohamad in, Elie out            → 'Elie has left and Mohamad is now in front of you.'\n"
             "  Changes: 1 unrecognized person appeared  → 'Someone has just walked up to you.'\n"
             "  No changes, Recognized: Mohamad          → 'Mohamad is still in front of you.'\n"
-            "  No changes, no people                    → 'A chair sits ahead on your right.'"
+            "  No changes, no people                    → 'A chair sits ahead on your right.'\n"
+            "  Recognized: Mohamad. Objects: chair (large center), bottle (small top-right) "
+            "→ 'Mohamad is in front of you, with a chair just ahead and a bottle to your upper right.'\n"
+            "  Recognized: Mohamad. Objects: 2 chairs (large center, medium left-middle) "
+            "→ 'Mohamad is in front of you, with chairs around him.'\n\n"
+            "When 'Visible objects' is provided, treat it as ground truth — those items "
+            "ARE in the scene. If a recognized person is also present, weave them together "
+            "into ONE sentence (the person AND the most prominent 1-2 objects with their "
+            "position). Do not invent objects that are not listed."
         )
 
         dyn = dict(snap.get("dynamic", {}))
         scene_desc = (dyn.pop("scene_description", "") or "").strip()
         faces = dyn.pop("face_recognition", []) or []
+        # Object detections get formatted into a compact human-readable line
+        # below — popping here keeps the raw JSON out of "Other detections".
+        objects = dyn.pop("object_detection", []) or []
+        objects_line = _format_objects_line(objects)
 
         recognized_list = [
             f.get("person_id", "") for f in faces
@@ -356,6 +421,8 @@ class OllamaVLM(ModelAdapter):
         sections: list[str] = []
         if scene_desc:
             sections.append(f"Scene: {scene_desc}")
+        if objects_line:
+            sections.append(f"Visible objects: {objects_line}")
         if dyn:
             sections.append(
                 "Other detections: "
@@ -389,9 +456,13 @@ class OllamaVLM(ModelAdapter):
                 "" if is_first
                 else "Nothing has changed since the last narration. "
             )
+            obj_cue = (
+                " AND the most prominent visible object with its position"
+                if objects_line else ""
+            )
             sections.append(
                 f"{preamble}Now narrate the current scene in ONE short sentence. "
-                f"You MUST mention {', '.join(recognized)} by name."
+                f"You MUST mention {', '.join(recognized)} by name{obj_cue}."
             )
         else:
             sections.append("Now narrate the scene in ONE short sentence:")
