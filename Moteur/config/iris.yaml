@@ -41,8 +41,8 @@ adapters:
 pipeline:
   max_workers: 4
   infer_cooldown_s: 10.0   # minimum seconds between consecutive inference triggers
-  annotate_vlm_faces:   false  # draw face boxes on the frame sent to the VLM
-  annotate_vlm_objects: false  # draw YOLO boxes on the frame sent to the VLM
+  annotate_vlm_faces:   true  # draw face boxes on the frame sent to the VLM
+  annotate_vlm_objects: true  # draw YOLO boxes on the frame sent to the VLM
 
 # Multi-signal scene-change detector (Moteur.core.scene_gate). All five
 # signals are normalized to [0, 1] and combined via the weights below;
@@ -50,12 +50,13 @@ pipeline:
 scene_gate:
   trigger_score: 0.4
   weights:
-    dhash:      0.30   # pixel-level change (dHash hamming)
-    face_count: 0.20   # any change in number of faces detected
-    identity:   0.20   # set of recognized people changed
-    flow:       0.10   # instantaneous optical-flow motion
-    embedding:  0.20   # MobileNet logits cosine distance (semantic)
-    objects:    0.15   # YOLO label-set changed vs committed frame
+    dhash:        0.30   # pixel-level change (dHash hamming)
+    face_count:   0.15   # any change in number of faces detected (YuNet)
+    identity:     0.20   # set of recognized people changed
+    flow:         0.10   # instantaneous optical-flow motion
+    embedding:    0.20   # MobileNet logits cosine distance (semantic)
+    objects:      0.15   # YOLO label-set changed vs committed frame
+    person_count: 0.20   # YOLO person count changed (authoritative headcount)
   thresholds:
     # Per-signal "max" values — used to normalize each raw signal to [0, 1]
     # before weighting. Tuning rule of thumb: pick the value at which a

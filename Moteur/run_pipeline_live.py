@@ -466,6 +466,7 @@ def draw_overlay(frame: np.ndarray, result: Optional[dict],
         )
         hud.append(
             f"  faces : {signals.face_count} (Δ {signals.face_count_delta:+d})  "
+            f"persons: {signals.person_count} (Δ {signals.person_count_delta:+d})  "
             f"id-chg: {'Y' if signals.identity_changed else 'N'}"
         )
         hud.append(
@@ -663,6 +664,7 @@ def build_scene_gate(cfg: dict, sface_adapter) -> SceneGate:
         w_flow           = float(weights.get("flow", 0.10)),
         w_embedding      = float(weights.get("embedding", 0.20)),
         w_objects        = float(weights.get("objects", 0.15)),
+        w_person_count   = float(weights.get("person_count", 0.20)),
         trigger_score    = float(sg_cfg.get("trigger_score", 0.20)),
         mobilenet_path   = sg_cfg.get(
             "mobilenet_path",

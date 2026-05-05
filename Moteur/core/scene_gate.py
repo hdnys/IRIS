@@ -73,6 +73,8 @@ class GateSignals:
     object_count_delta: int = 0
     object_labels: frozenset = field(default_factory=frozenset)
     objects_changed: bool = False
+    person_count: int = 0
+    person_count_delta: int = 0
 
     # Combined decision
     score: float = 0.0
@@ -103,6 +105,7 @@ class SceneGate:
         w_flow: float = 0.10,
         w_embedding: float = 0.20,
         w_objects: float = 0.15,
+        w_person_count: float = 0.20,
         # Final threshold the weighted sum must exceed to fire.
         trigger_score: float = 0.20,
         # MobileNet ONNX model path. Auto-downloads from MOBILENET_URL if
@@ -120,6 +123,7 @@ class SceneGate:
         self.w_flow = w_flow
         self.w_embedding = w_embedding
         self.w_objects = w_objects
+        self.w_person_count = w_person_count
         self.trigger_score = trigger_score
         self._mobilenet_path = Path(mobilenet_path)
         self._download_if_missing = download_if_missing
@@ -138,6 +142,7 @@ class SceneGate:
         self._committed_embedding: Optional[np.ndarray] = None
         self._committed_object_count: Optional[int] = None
         self._committed_object_labels: frozenset = frozenset()
+        self._committed_person_count: Optional[int] = None
 
         self._net: Optional[cv2.dnn.Net] = None
         # Concurrent evaluate() + commit() can race on the committed_*
@@ -201,6 +206,7 @@ class SceneGate:
             committed_embedding = self._committed_embedding
             committed_object_count = self._committed_object_count
             committed_object_labels = self._committed_object_labels
+            committed_person_count = self._committed_person_count
 
         if committed_dhash is None:
             # First frame of the session — treat everything as "very different"
@@ -253,6 +259,16 @@ class SceneGate:
                 sig.object_count_delta = sig.object_count - committed_object_count
                 sig.objects_changed = sig.object_labels != committed_object_labels
 
+            # 3c) YOLO person count — authoritative headcount separate from face count.
+            sig.person_count = sum(
+                1 for o in sig._objects
+                if isinstance(o, dict) and o.get("label") == "person"
+            )
+            if committed_person_count is None:
+                sig.person_count_delta = sig.person_count
+            else:
+                sig.person_count_delta = sig.person_count - committed_person_count
+
         # 4) Optical flow vs the previous frame.
         sig.flow_magnitude = self._optical_flow(frame)
 
@@ -267,12 +283,13 @@ class SceneGate:
 
         # Combine. Each component is clipped to [0, 1] before weighting.
         score = (
-            self.w_dhash      * min(1.0, sig.dhash_distance / self.dhash_max_bits)
-            + self.w_face_count * (1.0 if abs(sig.face_count_delta) > 0 else 0.0)
-            + self.w_identity   * (1.0 if sig.identity_changed else 0.0)
-            + self.w_flow       * min(1.0, sig.flow_magnitude / self.flow_max)
-            + self.w_embedding  * min(1.0, sig.embedding_distance / self.embedding_max)
-            + self.w_objects    * (1.0 if sig.objects_changed else 0.0)
+            self.w_dhash         * min(1.0, sig.dhash_distance / self.dhash_max_bits)
+            + self.w_face_count  * (1.0 if abs(sig.face_count_delta) > 0 else 0.0)
+            + self.w_identity    * (1.0 if sig.identity_changed else 0.0)
+            + self.w_flow        * min(1.0, sig.flow_magnitude / self.flow_max)
+            + self.w_embedding   * min(1.0, sig.embedding_distance / self.embedding_max)
+            + self.w_objects     * (1.0 if sig.objects_changed else 0.0)
+            + self.w_person_count * (1.0 if abs(sig.person_count_delta) > 0 else 0.0)
         )
         sig.score = float(score)
         sig.triggered = sig.score >= self.trigger_score
@@ -295,6 +312,7 @@ class SceneGate:
                 self._committed_embedding = signals._embedding
             self._committed_object_count = signals.object_count
             self._committed_object_labels = signals.object_labels
+            self._committed_person_count = signals.person_count
 
     # ------------------------------------------------------------------
     # Internal: per-signal helpers
