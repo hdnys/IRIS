@@ -11,12 +11,13 @@ This is the only component that knows the order of operations. Per frame:
                               outputs are dropped.
   3. Schema validation       — assembled context is validated; failures are
                               logged via the EventBus but do not abort.
-  4. Narrator pass           — text-only LLM reads the assembled pool and
-                              emits the user-facing string.
+  4. Finalization            — the VLM scene output is mirrored as the final
+                              narration string.
 
-Steps 2 and 4 are sequential because the narrator needs the full pool. Step
-2 is embarrassingly parallel: the VLM scene call and the dynamic adapters
-write to disjoint dynamic.* keys.
+The VLM is now single-pass per frame: one multimodal call receives the image
+plus both the scene and system instructions, and returns the narration text.
+Step 2 is embarrassingly parallel: the VLM call and the dynamic adapters write
+to disjoint dynamic.* keys.
 """
 from __future__ import annotations
 
@@ -73,15 +74,15 @@ class Orchestrator:
         self._dispatch_parallel(frame, frame_id, objects=objects, faces=faces)
 
         # Phase 3: validate. Caught broadly because we deliberately want
-        # the narrator pass to run even on partial data — better a degraded
+        # final narration to continue even on partial data — better a degraded
         # description than silence.
         try:
             self.pool.validate()
         except Exception as e:
             self.events.emit("validation_error", {"error": str(e)})
 
-        # Phase 4: narrate. Returns the string to hand off to TTS.
-        return self._run_narrator(frame_id)
+        # Phase 4: mirror the VLM output as final narration.
+        return self._finalize_vlm_output(frame_id)
 
     def shutdown(self) -> None:
         """Release executor and unload every adapter. Called on app exit."""
@@ -156,11 +157,10 @@ class Orchestrator:
                        faces: Optional[list] = None) -> None:
         """Run the VLM in static mode and route its string output to the pool.
 
-        The static mode now returns just a scene-description string (see
+        Static mode now returns the final narration string (see
         ``Moteur.adapters.vlm_ollama``). We write it to
         ``dynamic.scene_description`` so it sits alongside every other
-        adapter's output and the narrator can read it the same way it reads
-        anything else. Same boundary semantics as ``_run_adapter``: must NOT
+        adapter's output. Same boundary semantics as ``_run_adapter``: must NOT
         raise. All exceptions become ``status="error:..."`` in model_meta.
         """
         t0 = time.time()
@@ -208,38 +208,22 @@ class Orchestrator:
                               (time.time() - t0) * 1000.0, status,
                               version=getattr(adapter, "version", ""))
 
-    def _run_narrator(self, frame_id: str) -> Optional[str]:
-        """Phase 4: VLM in describe mode. Generates the user-facing string.
+    def _finalize_vlm_output(self, frame_id: str) -> Optional[str]:
+        """Phase 4: finalize narration from the single VLM output.
 
-        Returns None if (a) no VLM is registered, (b) the frame has been
-        superseded mid-pipeline, or (c) the narrator call raises. The TTS
-        layer treats None as "stay silent on this frame".
+        The VLM already produced narration in static mode (image + scene prompt
+        + system prompt). We keep that text under both dynamic keys so existing
+        consumers can read either ``scene_description`` or ``vlm_description``.
         """
-        vlm = self.registry.get("vlm")
-        if vlm is None:
-            return None
-
         snap = self.pool.snapshot()
         # Frame supersession check: if a newer frame has already started while
-        # we were dispatching, this narration would be built from a mix of
-        # old + new state. Drop it.
+        # we were dispatching, drop this narration.
         if snap["static"]["frame_id"] != frame_id:
             return None
 
-        t0 = time.time()
-        try:
-            text = vlm.run(None, snap, mode="describe")
-        except Exception as e:
-            self.pool.update_meta("vlm_describe", type(vlm).__name__,
-                                  (time.time() - t0) * 1000.0, f"error:{e}")
+        text = (snap.get("dynamic", {}).get("scene_description") or "").strip()
+        if not text:
             return None
 
-        self.pool.update_meta("vlm_describe", type(vlm).__name__,
-                              (time.time() - t0) * 1000.0, "ok",
-                              version=getattr(vlm, "version", ""))
-
-        # Persist the narration into the pool too — useful for logs, debug
-        # overlays, and any subscriber that wants the final output without
-        # listening to TTS.
         self.pool.update_dynamic("vlm_description", text, frame_id)
         return text

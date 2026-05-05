@@ -3,17 +3,14 @@ adapters:
     module: Moteur.adapters.vlm_ollama
     class:  OllamaVLM
     params:
-      model:           llava-phi3      # multimodal — writes scene description
-      model_describe:  llava-phi3 #gemma3:1b      # text-only narrator
-      host:  http://127.0.0.1:11434
-      keep_alive: -1
-      timeout_s: 120
-      max_image_side: 512             # llava-phi3 vision encoder; 512px is sufficient
-      num_ctx: 2048
-      temperature: 0.3               # mild variation, not chaotic
-      num_predict_static: 220         # more headroom for verbose scene descriptions
-      num_predict_describe: null      # null = derive from user_profile.verbosity
-      departure_grace_s: 300          # mark a person gone only after 5 minutes absent
+      model:             llava-phi3      # multimodal single-pass narrator
+      host:              http://127.0.0.1:11434
+      keep_alive:        -1
+      timeout_s:         120
+      max_image_side:    512             # llava-phi3 vision encoder; 512px is sufficient
+      num_ctx:           2048
+      temperature:       0.3             # mild variation, not chaotic
+      num_predict_static: 220            # more headroom for verbose scene descriptions
   object_detection:
     module: Moteur.adapters.objdet_yolo
     class:  YoloObjectDetector

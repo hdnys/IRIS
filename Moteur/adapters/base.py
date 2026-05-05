@@ -33,7 +33,7 @@ class ModelAdapter(ABC):
 
         - Dynamic adapters (objdet, face, ocr, ...): return the payload that
           will be written under ``dynamic.<role>``. Must conform to the schema.
-        - VLM adapter: ``kwargs['mode']`` is either 'static' (return a partial
-          dict of static fields) or 'describe' (return the description string).
+        - VLM adapter: ``kwargs['mode']`` is typically 'static' and returns the
+          narration string generated from one multimodal call.
         """
         ...
