@@ -52,6 +52,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from typing import Any, Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -68,6 +69,8 @@ log = logging.getLogger(__name__)
 # than schema-style instructions for this kind of task.
 SCENE_PROMPT = (
     "Describe what you see in 1-2 short factual sentences. "
+    "People may have colored face-detection boxes and labels over them; "
+    "ignore these overlays and never describe them. "
     "Mention people (count and what they appear to be doing), key objects, "
     "spatial layout (left/right/center/foreground), and "
     "(steps, traffic, obstacles). Do not give advice. Do not greet. "
@@ -135,6 +138,7 @@ class OllamaVLM(ModelAdapter):
         num_ctx: int = 2048,
         num_predict_static: int = 120,
         num_predict_describe: Optional[int] = None,
+        departure_grace_s: float = 300.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(role, **kwargs)
@@ -161,6 +165,9 @@ class OllamaVLM(ModelAdapter):
         # Describe ceiling: None means "derive from the user's verbosity
         # setting at call time"; an integer forces an explicit cap.
         self.num_predict_describe = num_predict_describe
+        # A recognized person must be continuously absent this long before we
+        # narrate that they left.
+        self.departure_grace_s = max(0.0, float(departure_grace_s))
 
         # ---- Cross-frame memory for change-aware narration -----------------
         # The narrator describes a moving scene to a user who can't see — what
@@ -172,6 +179,7 @@ class OllamaVLM(ModelAdapter):
         # Lives for the whole session. The orchestrator runs only one
         # describe call at a time, so no locking is required.
         self._prev_recognized: set[str] = set()
+        self._last_seen_recognized: dict[str, float] = {}
         self._prev_unknown_count: int = 0
         self._prev_described: bool = False
 
@@ -298,6 +306,7 @@ class OllamaVLM(ModelAdapter):
             and f["person_id"] != "Unknown"
         ]
         recognized = sorted(set(recognized_list))   # de-dupe + stable order
+        recognized_set = set(recognized)
         unknown_count = sum(
             1 for f in faces
             if isinstance(f, dict) and f.get("person_id") == "Unknown"
@@ -307,9 +316,16 @@ class OllamaVLM(ModelAdapter):
         # Capture is_first BEFORE _prev_described is updated below so the
         # cue branch can tell "first frame of session" from "scene unchanged".
         is_first = not self._prev_described
+        now_s = time.monotonic()
+        for name in recognized_set:
+            self._last_seen_recognized[name] = now_s
         if not is_first:
-            appeared = sorted(set(recognized) - self._prev_recognized)
-            departed = sorted(self._prev_recognized - set(recognized))
+            appeared = sorted(recognized_set - self._prev_recognized)
+            departed = [
+                name for name in sorted(self._prev_recognized - recognized_set)
+                if (now_s - self._last_seen_recognized.get(name, now_s))
+                >= self.departure_grace_s
+            ]
             unknown_delta = unknown_count - self._prev_unknown_count
         else:
             # First call of the session — there is no "previous" frame to
@@ -385,7 +401,9 @@ class OllamaVLM(ModelAdapter):
         # Save state for the next describe call. Done BEFORE the HTTP call
         # so a transient Ollama failure doesn't leave us re-announcing the
         # same diff next frame.
-        self._prev_recognized = set(recognized)
+        self._prev_recognized = (self._prev_recognized | recognized_set) - set(departed)
+        for name in departed:
+            self._last_seen_recognized.pop(name, None)
         self._prev_unknown_count = unknown_count
         self._prev_described = True
 

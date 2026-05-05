@@ -13,6 +13,7 @@ adapters:
       temperature: 0.3                # mild variation, not chaotic
       num_predict_static: 120         # ~50-token descriptions; 120 is headroom
       num_predict_describe: null      # null = derive from user_profile.verbosity
+      departure_grace_s: 300          # mark a person gone only after 5 minutes absent
     # Local HuggingFace alternative (no Ollama required):
     #   module: Moteur.adapters.vlm_local
     #   class:  LocalVLM
@@ -43,10 +44,28 @@ adapters:
 
 pipeline:
   max_workers: 4
-  # dHash hamming distance threshold (out of 256 bits). 25 ≈ 10% of bits
-  # flipped — comfortably above webcam sensor noise, well below "scene
-  # changed". Lower = more frequent re-inference; higher = lazier.
-  similarity_threshold: 25
+  infer_cooldown_s: 3.0   # minimum seconds between consecutive inference triggers
+
+# Multi-signal scene-change detector (Moteur.core.scene_gate). All five
+# signals are normalized to [0, 1] and combined via the weights below;
+# inference fires when the combined score >= trigger_score.
+scene_gate:
+  trigger_score: 0.5
+  weights:
+    dhash:      0.30   # pixel-level change (dHash hamming)
+    face_count: 0.20   # any change in number of faces detected
+    identity:   0.20   # set of recognized people changed
+    flow:       0.10   # instantaneous optical-flow motion
+    embedding:  0.20   # MobileNet logits cosine distance (semantic)
+  thresholds:
+    # Per-signal "max" values — used to normalize each raw signal to [0, 1]
+    # before weighting. Tuning rule of thumb: pick the value at which a
+    # signal is "definitely a scene change on its own".
+    dhash_max_bits: 64    # out of 256
+    flow_max:        5.0  # mean flow vector magnitude in pixels
+    embedding_max:   0.4  # 1 - cosine similarity, in [0, 2]
+  mobilenet_path:       models/image_classification_mobilenetv2_2022apr.onnx
+  download_if_missing:  true
 
 user_profile:
   vision_profile: total_blindness
