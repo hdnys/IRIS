@@ -30,6 +30,9 @@ Usage from project root::
 
 Controls:
     q / ESC — quit
+    p       — toggle pool window
+    s       — toggle scene outline window
+    l       — learn a new face
 """
 from __future__ import annotations
 
@@ -556,6 +559,91 @@ def render_pool_image(snap: dict, width: int = 760, max_lines: int = 60) -> np.n
     return img
 
 
+def render_scene_image(result: dict, width: int = 700) -> np.ndarray:
+    """Render the llava-phi3 scene outline + narrator output as a debug image.
+
+    Each CATEGORY: value line from the structured outline gets its label
+    highlighted in a distinct colour so it's easy to scan at a glance.
+    """
+    scene   = (result.get("scene") or "").strip()
+    narr    = (result.get("description") or "").strip()
+    ms      = result.get("ms", 0.0)
+    personas = result.get("snap", {}).get("dynamic", {}).get("personas", []) or []
+
+    lines: list[tuple[str, tuple]] = []  # (text, bgr_colour)
+    _DIM   = (160, 160, 160)
+    _LABEL = (100, 220, 100)   # green — category names
+    _VALUE = (220, 220, 220)   # light — category values
+    _HEAD  = (140, 200, 255)   # blue  — section headers
+    _NARR  = (255, 200,  80)   # amber — narrator output
+
+    lines.append((f"llava-phi3 scene outline  [{ms:.0f} ms total]", _HEAD))
+    lines.append(("", _DIM))
+
+    if scene:
+        for raw in scene.split("\n"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            if ":" in raw:
+                label, _, value = raw.partition(":")
+                lines.append((f"{label.strip()}:", _LABEL))
+                # Word-wrap the value at ~80 chars
+                value = value.strip()
+                while len(value) > 80:
+                    cut = value[:80].rfind(" ")
+                    cut = cut if cut > 40 else 80
+                    lines.append(("  " + value[:cut], _VALUE))
+                    value = value[cut:].strip()
+                if value:
+                    lines.append(("  " + value, _VALUE))
+            else:
+                lines.append((raw, _VALUE))
+    else:
+        lines.append(("(no outline yet)", _DIM))
+
+    lines.append(("", _DIM))
+    lines.append(("personas", _HEAD))
+    if personas:
+        for p in personas:
+            pid  = p.get("person_id", "?")
+            pos  = p.get("position") or "?"
+            size = p.get("size") or "?"
+            conf = p.get("face_confidence")
+            conf_str = f"  face={conf:.2f}" if conf is not None else ""
+            lines.append((f"  {pid}  {size} {pos}{conf_str}", _VALUE))
+    else:
+        lines.append(("  (none)", _DIM))
+
+    lines.append(("", _DIM))
+    lines.append(("narrator output", _HEAD))
+    if narr:
+        # Wrap narrator output
+        words, line_buf = narr.split(), ""
+        for w in words:
+            candidate = (line_buf + " " + w).strip()
+            if len(candidate) <= 80:
+                line_buf = candidate
+            else:
+                lines.append(("  " + line_buf, _NARR))
+                line_buf = w
+        if line_buf:
+            lines.append(("  " + line_buf, _NARR))
+    else:
+        lines.append(("  (none)", _DIM))
+
+    line_h = 17
+    height = max(200, line_h * len(lines) + 24)
+    img = np.full((height, width, 3), 18, dtype=np.uint8)
+
+    for i, (text, color) in enumerate(lines):
+        if not text:
+            continue
+        cv2.putText(img, text, (8, 20 + i * line_h),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
+    return img
+
+
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
@@ -652,7 +740,9 @@ def main() -> None:
     last_infer_time = 0.0
     last_announced = ""
     last_pool_img: Optional[np.ndarray] = None
+    last_scene_img: Optional[np.ndarray] = None
     show_pool = True
+    show_scene = True
     learner: Optional[FaceLearner] = None
 
     try:
@@ -729,11 +819,10 @@ def main() -> None:
                 last_announced = result["description"]
                 print(f"[{result['ms']:5.0f} ms] {result['description']}")
                 tts.speak(result["description"])
-                # Refresh the pool view exactly when a new narration lands —
-                # avoids re-rendering the same image every frame.
                 snap = result.get("snap")
                 if isinstance(snap, dict):
                     last_pool_img = render_pool_image(snap)
+                last_scene_img = render_scene_image(result)
 
             fps_n += 1
             now = time.perf_counter()
@@ -752,6 +841,8 @@ def main() -> None:
             cv2.imshow("IRIS — live pipeline", display)
             if show_pool and last_pool_img is not None:
                 cv2.imshow("IRIS — pool", last_pool_img)
+            if show_scene and last_scene_img is not None:
+                cv2.imshow("IRIS — scene outline", last_scene_img)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
@@ -761,6 +852,13 @@ def main() -> None:
                 if not show_pool:
                     try:
                         cv2.destroyWindow("IRIS — pool")
+                    except cv2.error:
+                        pass
+            if key == ord("s"):
+                show_scene = not show_scene
+                if not show_scene:
+                    try:
+                        cv2.destroyWindow("IRIS — scene outline")
                     except cv2.error:
                         pass
             if key == ord("l") and learner is None:

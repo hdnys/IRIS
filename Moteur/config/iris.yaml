@@ -11,7 +11,7 @@ adapters:
       max_image_side: 512             # llava-phi3 vision encoder; 512px is sufficient
       num_ctx: 2048
       temperature: 0.3               # mild variation, not chaotic
-      num_predict_static: 220         # more headroom for verbose scene descriptions
+      num_predict_static: 400         # structured outline needs more tokens than prose
       num_predict_describe: null      # null = derive from user_profile.verbosity
       departure_grace_s: 300          # mark a person gone only after 5 minutes absent
   object_detection:

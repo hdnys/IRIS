@@ -64,15 +64,27 @@ from Moteur.adapters.base import ModelAdapter
 log = logging.getLogger(__name__)
 
 
-# Single short prompt — llava-phi3 and gemma3:1b both follow plain English
-# better than schema-style instructions for this kind of task.
+# Structured outline prompt for llava-phi3. Produces labeled keyword sections
+# that gemma3:1b can reliably interpret — avoids the hallucination and
+# over-poetic prose that natural-language scene prompts produce.
 SCENE_PROMPT = (
-    "Describe the scene in 1-2 short, factual sentences for a blind user. "
-    "Use the text labels in the image to identify people and objects, but NEVER use the words 'box', 'label', 'text', or 'overlay'. "
-    "Treat the names as your inherent knowledge of who and what is present. "
-    "Identify the number of people, name them, and make educated logical deductions to describe their actions and interactions with the environment. "
-    "Note key objects and precise spatial layout (left, right, center, foreground). "
-    "Do not give advice. Do not greet. Output only the exact scene description."
+    "Analyze this image and output a structured scene outline. "
+    "Use short keywords and phrases only — NO full sentences. "
+    "Be thorough: list everything you observe in each category.\n\n"
+    "SPATIAL_LEFT: <objects, people, features on the left side>\n"
+    "SPATIAL_CENTER: <objects, people, features in the center>\n"
+    "SPATIAL_RIGHT: <objects, people, features on the right side>\n"
+    "SPATIAL_FOREGROUND: <what is close to the camera>\n"
+    "SPATIAL_BACKGROUND: <what is far from the camera or behind other elements>\n"
+    "ENVIRONMENT: <type of space, e.g. office, kitchen, corridor, outdoor street, living room>\n"
+    "LIGHTING: <quality and source, e.g. bright natural from left, dim overhead, shadowed, backlit>\n"
+    "SURFACES: <visible floors, walls, ceiling, tables, counters, furniture surfaces>\n"
+    "ACTIONS: <what people or things are actively doing, e.g. person typing, walking toward camera, arm raised>\n"
+    "INTERACTIONS: <how people or objects relate to each other or the space, e.g. person facing desk, two people talking>\n"
+    "CONTEXT: <any other notable details, e.g. door open, screen on, window showing outside, clutter, empty space>\n\n"
+    "If a category has nothing notable, write NONE. "
+    "Ignore colored detection boxes and text overlays on the image — "
+    "treat any labeled names as your own knowledge of who is present."
 )
 
 
@@ -165,9 +177,10 @@ def _format_objects_line(objects: list[dict]) -> str:
     return ", ".join(parts)
 
 
-# Cap on raw scene_description length — defends the narrator's prompt from
-# a runaway VLM that ignores the "1-2 sentences" instruction.
-SCENE_DESC_MAX_CHARS = 600
+# Cap on the structured outline length forwarded to the narrator prompt.
+# Structured outlines are longer than prose — 1200 gives 10-12 populated
+# categories without bloating gemma3:1b's context.
+SCENE_DESC_MAX_CHARS = 1200
 
 
 def _build_grounding(personas: list[dict], non_person_objects: list[dict]) -> str:
@@ -198,10 +211,11 @@ def _build_grounding(personas: list[dict], non_person_objects: list[dict]) -> st
         return ""
 
     return (
-        "Sensor data for this frame:\n"
+        "Sensor data for this frame (ground truth — do not contradict):\n"
         + "\n".join(f"  {p}" for p in parts) + "\n"
-        "Only describe people and objects that appear in the sensor data above. "
-        "Do not mention anything not listed there."
+        "Use the above as authoritative facts for identities and object labels. "
+        "In your outline, add spatial positions, environment, lighting, actions, "
+        "and context that the sensors cannot provide."
     )
 
 
@@ -367,11 +381,13 @@ class OllamaVLM(ModelAdapter):
         # rules. The CHANGES examples train the model to lead with diffs
         # ("Elie just left") rather than re-describing static state.
         system = (
-            f"You are IRIS, narrating a moving camera frame to a blind user.\n"
+            f"You are IRIS, narrating a scene to a blind user.\n"
             f"Length: {VERBOSITY_GUIDANCE.get(verbosity, VERBOSITY_GUIDANCE['standard'])}\n"
             f"Language: {language}. Second person ('you'). No greetings, no advice.\n"
-            "Use exact names from 'Recognized people'. Never invent names. "
-            "Anyone else is 'someone' or 'a person'.\n"
+            "Use exact names from 'People in view'. Never invent names. "
+            "Anyone unnamed is 'someone' or 'a person'.\n"
+            "'Scene outline' is a structured keyword summary from a vision model — "
+            "interpret it to write natural, spoken narration. Do NOT read it aloud literally.\n"
             "If 'Changes since last narration' is provided, lead with the change — "
             "the user already heard the previous state.\n\n"
             "Examples:\n"
@@ -379,16 +395,18 @@ class OllamaVLM(ModelAdapter):
             "  Changes: Elie left the view              → 'Elie is no longer in front of you.'\n"
             "  Changes: Mohamad in, Elie out            → 'Elie has left and Mohamad is now in front of you.'\n"
             "  Changes: 1 unrecognized person appeared  → 'Someone has just walked up to you.'\n"
-            "  No changes, Recognized: Mohamad          → 'Mohamad is still in front of you.'\n"
-            "  No changes, no people                    → 'A chair sits ahead on your right.'\n"
-            "  Recognized: Mohamad. Objects: chair (large center), bottle (small top-right) "
-            "→ 'Mohamad is in front of you, with a chair just ahead and a bottle to your upper right.'\n"
-            "  Recognized: Mohamad. Objects: 2 chairs (large center, medium left-middle) "
-            "→ 'Mohamad is in front of you, with chairs around him.'\n\n"
-            "When 'Visible objects' is provided, treat it as ground truth — those items "
-            "ARE in the scene. If a recognized person is also present, weave them together "
-            "into ONE sentence (the person AND the most prominent 1-2 objects with their "
-            "position). Do not invent objects that are not listed."
+            "  No changes, Mohamad center, desk foreground, office, typing "
+            "→ 'Mohamad is at a desk directly in front of you, appearing to type.'\n"
+            "  No changes, no people, chair left, bottle right, bright office "
+            "→ 'There is a chair to your left and a bottle to your right in a bright room.'\n"
+            "  Mohamad center foreground, Elie right background, both standing, corridor "
+            "→ 'Mohamad is right in front of you with Elie further back to your right, both standing in a corridor.'\n"
+            "  No changes, no people, kitchen, kettle foreground center "
+            "→ 'A kettle is directly in front of you in what looks like a kitchen.'\n"
+            "  Nour IS the person in the outline: large figure left, resting chin on hand, gazing at window, bright light "
+            "→ 'Nour is to your left, resting his chin on his hand and looking toward a bright window.'\n\n"
+            "When a name is given, that person and every description of a figure/man/woman in the outline are ONE entity. "
+            "Describe them once, fluently. Never split one person into two references in the same sentence."
         )
 
         dyn = dict(snap.get("dynamic", {}))
@@ -471,7 +489,7 @@ class OllamaVLM(ModelAdapter):
         # cue; otherwise the recognized-name list does.
         sections: list[str] = []
         if scene_desc:
-            sections.append(f"Scene: {scene_desc}")
+            sections.append(f"Scene outline (keywords from vision model):\n{scene_desc}")
         if objects_line:
             sections.append(f"Visible objects: {objects_line}")
         if dyn:
@@ -499,6 +517,18 @@ class OllamaVLM(ModelAdapter):
             for name in sorted(recognized_set - covered_names):
                 person_descs.append(name)
             sections.append("People in view: " + ", ".join(person_descs))
+            # Explicit bridge: the scene outline describes the same people listed
+            # above. Without this, small models narrate the name and the outline
+            # description as two separate entities ("Nour is here. A man is typing").
+            if recognized:
+                noun = "person" if len(recognized) == 1 else "people"
+                verb = "is" if len(recognized) == 1 else "are"
+                sections.append(
+                    f"Note: {', '.join(recognized)} {verb} the same {noun} described "
+                    "in the scene outline above. Merge all their details (position, "
+                    "action, appearance) into ONE description per person. "
+                    "Do not refer to the same person twice."
+                )
 
         if change_lines:
             sections.append(
