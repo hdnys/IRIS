@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>IRIS</title>
+    <link rel="stylesheet" href="/interface/css/index.css">
+    <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
+</head>
+
+<body>
+    <div class="header">
+        <button id="settingsBtn" class="headerbtn" onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
+        <button id="aboutBtn" class="headerbtn" onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
+        <button id="contactBtn" class="headerbtn" onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
+        <button id="closedonesBtn" class="headerbtn" onclick="window.location.href='/interface/html/closedones.html'">CLOSED ONES</button>
+    </div>
+
+    <div class="title">
+        <p id="h1">Iris</p>
+        <p class="h2" id="h2">INTELLIGENT RESOURCE FOR SHORT-SIGHTED INDIVIDUAL</p>
+    </div>
+
+    <div class="container">
+        <div class="category">
+            <h3>YOUR VISUAL DEFICIENCY</h3>
+            <div class="card">
+                <p class=" h3" id="visual deficiency">Total Blindness</p>
+                <p>Total Blindness is a condition where an individual has no light perception.</p>
+            </div>
+        </div>
+
+        <canvas id="video" width="640" height="480" style="border: 2px solid #233C5D;"></canvas>
+
+        <div class="category">
+            <h3>YOUR CLOSED ONES</h3>
+            <div class="grid" id="friendsGrid">
+                <!-- Friends will be loaded here by JavaScript -->
+            </div>
+
+        </div>
+
+    </div>
+
+    <div>
+        <button id="startBtn" onclick="startPipeline()">▶️ Start</button>
+        <button id="stopBtn" onclick="stopPipeline()" disabled>⏹️ Stop</button>
+    </div>
+
+    <div class="status">
+        Status: <span id="status">stopped</span>
+    </div>
+
+    <h3>Pool State (Real-time)</h3>
+    <div class="pool-viewer" id="poolViewer">{...}</div>
+
+    <script>
+        const canvas = document.getElementById('video');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        let videoWs = null;
+        let poolWs = null;
+
+        // Get the current hostname and port for WebSocket connections
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+
+        async function startPipeline() {
+            const res = await fetch('/api/start', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                statusEl.textContent = 'running';
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                connectWebSockets();
+            } else {
+                alert('Error: ' + (data.error || 'Unknown error'));
+            }
+        }
+
+        async function stopPipeline() {
+            const res = await fetch('/api/stop', { method: 'POST' });
+            if (res.ok) {
+                statusEl.textContent = 'stopped';
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                if (videoWs) videoWs.close();
+                if (poolWs) poolWs.close();
+            }
+        }
+
+        function connectWebSockets() {
+            // Video stream
+            videoWs = new WebSocket(`${wsUrl}/ws/video`);
+            videoWs.binaryType = 'arraybuffer';
+            videoWs.onmessage = (event) => {
+                const blob = new Blob([event.data]);
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+                img.onload = () => {
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+                };
+                img.onerror = () => URL.revokeObjectURL(url);
+                img.src = url;
+            };
+            videoWs.onerror = (err) => console.error('Video WS error:', err);
+
+            // Pool updates
+            poolWs = new WebSocket(`${wsUrl}/ws/pool`);
+            poolWs.onmessage = (event) => {
+                try {
+                    document.getElementById('poolViewer').textContent =
+                        JSON.stringify(JSON.parse(event.data), null, 2);
+                } catch (e) {
+                    console.error('Failed to parse pool data:', e);
+                }
+            };
+            poolWs.onerror = (err) => console.error('Pool WS error:', err);
+        }
+
+        // Load registered friends on page load
+        async function loadFriends() {
+            try {
+                const res = await fetch('/api/friends');
+                const data = await res.json();
+                const friendsGrid = document.getElementById('friendsGrid');
+                friendsGrid.innerHTML = '';
+
+                if (data.friends && data.friends.length > 0) {
+                    data.friends.forEach(friend => {
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        
+                        // Get random image
+                        let photoHTML = `<div class="photo" style="background: linear-gradient(135deg, #00BDC6, #233C5D); display: flex; align-items: center; justify-content: center;"><span style="color: white; font-weight: bold;">${friend.name.charAt(0).toUpperCase()}</span></div>`;
+                        
+                        if (friend.images && friend.images.length > 0) {
+                            const randomImage = friend.images[Math.floor(Math.random() * friend.images.length)];
+                            const imageUrl = `/data/${friend.name}/${randomImage}`;
+                            photoHTML = `<img src="${imageUrl}" alt="${friend.name}" style="width: 100%; height: 200px; object-fit: cover; border-radius: 5px 5px 0 0;" onerror="this.parentElement.style.background='linear-gradient(135deg, #00BDC6, #233C5D)'; this.style.display='none';">`;
+                        }
+                        
+                        card.innerHTML = `
+                            ${photoHTML}
+                            <p class="h3" style="margin-top: 10px;">${friend.name}</p>
+                            <p style="font-size: 12px; color: #ccc; margin: 0;">${friend.count} image(s)</p>
+                        `;
+                        friendsGrid.appendChild(card);
+                    });
+                } else {
+                    friendsGrid.innerHTML = '<p style="grid-column: 1/-1; color: #fff;">No registered friends yet</p>';
+                }
+            } catch (err) {
+                console.error('Error loading friends:', err);
+            }
+        }
+
+        // Load friends when page loads
+        document.addEventListener('DOMContentLoaded', loadFriends);
+    </script>
+</body>
+
+</html>
