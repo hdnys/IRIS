@@ -36,8 +36,11 @@
             </div>
         </div>
 
-        <!-- Camera feed -->
-        <canvas id="video" width="640" height="480"></canvas>
+        <!-- Camera feed — dimensions set dynamically to match the server frame -->
+        <div class="video-wrap">
+            <canvas id="video"></canvas>
+            <button class="fullscreen-btn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+        </div>
 
         <!-- Entourage -->
         <div class="category">
@@ -46,7 +49,6 @@
                 <!-- populated by JS -->
             </div>
             <a class="see-all" href="/interface/html/closedones.html">View all →</a>
-            <button class="add-btn" onclick="openLearnModal()">+ Add</button>
         </div>
 
     </div>
@@ -61,18 +63,13 @@
         Status: <span id="status">stopped</span>
     </div>
 
-    <h3 style="max-width:100%; color:#ccc;">Pool State (Real-time)</h3>
+    <h3 style="max-width:100%; color:#e0e0e0;">Pool State (Real-time)</h3>
     <div class="pool-viewer" id="poolViewer">{…}</div>
 
     <!-- ── Add-to-entourage modal ───────────────────────────── -->
-    <div id="learnModal" class="modal-overlay" style="display:none;"
-         onclick="if(event.target===this) cancelLearning()">
+    <div id="learnModal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
             <div class="modal-title">Add to Entourage</div>
-            <p class="modal-desc">
-                The pipeline must be running.<br>
-                IRIS will guide you through 5 head poses.
-            </p>
             <input class="modal-input" type="text" id="learnName"
                    placeholder="First name" maxlength="30"
                    onkeydown="if(event.key==='Enter') startLearning()">
@@ -137,7 +134,17 @@
                 const blob = new Blob([event.data]);
                 const url  = URL.createObjectURL(blob);
                 const img  = new Image();
-                img.onload = () => { ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
+                img.onload = () => {
+                    // Match canvas resolution to the actual frame so the full
+                    // field of view is always shown without cropping.
+                    if (canvas.width  !== img.naturalWidth ||
+                        canvas.height !== img.naturalHeight) {
+                        canvas.width  = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
+                    }
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+                };
                 img.onerror = () => URL.revokeObjectURL(url);
                 img.src = url;
             };
@@ -169,7 +176,7 @@
             }
         }
 
-        /* ── Entourage grid (compact thumbnails) ─────────────── */
+        /* ── Entourage grid (up to 3 friends + 1 add slot) ─────── */
         async function loadFriends() {
             try {
                 const res  = await fetch('/api/friends');
@@ -177,13 +184,7 @@
                 const grid = document.getElementById('friendsGrid');
                 grid.innerHTML = '';
 
-                const friends = (data.friends || []).slice(0, 4); // show max 4 on home
-                if (friends.length === 0) {
-                    grid.innerHTML =
-                        '<p style="grid-column:1/-1;color:#fff;font-size:12px;font-family:Inter">None yet</p>';
-                    return;
-                }
-
+                const friends = (data.friends || []).slice(0, 3);
                 friends.forEach(friend => {
                     const card = document.createElement('div');
                     card.className = 'friend-mini';
@@ -201,12 +202,39 @@
                     }
                     grid.appendChild(card);
                 });
+
+                // 4th slot is always the add button
+                const addSlot = document.createElement('div');
+                addSlot.className = 'friend-mini friend-add-slot';
+                addSlot.title = 'Add to entourage';
+                addSlot.onclick = openLearnModal;
+                addSlot.innerHTML = '<span class="add-plus">+</span>';
+                grid.appendChild(addSlot);
             } catch (e) {
                 console.error('Error loading friends:', e);
             }
         }
 
-        /* ── Add-to-entourage modal ──────────────────────────── */
+        /* ── Fullscreen ──────────────────────────────────────── */
+        function toggleFullscreen() {
+            const wrap = document.querySelector('.video-wrap');
+            if (!document.fullscreenElement) {
+                (wrap.requestFullscreen || wrap.webkitRequestFullscreen).call(wrap);
+            } else {
+                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            }
+        }
+
+        /* ── TTS helper ──────────────────────────────────────── */
+        let _lastSpoken = '';
+        function speak(text) {
+            if (!window.speechSynthesis || !text || text === _lastSpoken) return;
+            _lastSpoken = text;
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }
+
+        /* ── Add-to-entourage panel ──────────────────────────── */
         let _learningPoll = null;
 
         function openLearnModal() {
@@ -217,11 +245,15 @@
             document.getElementById('learnStartBtn').disabled    = false;
             document.getElementById('learnName').disabled        = false;
             document.getElementById('learnName').focus();
+            _lastSpoken = '';
+            speak('Add to entourage. Enter a first name and press Start.');
         }
 
         function closeLearnModal() {
             document.getElementById('learnModal').style.display = 'none';
             if (_learningPoll) { clearInterval(_learningPoll); _learningPoll = null; }
+            window.speechSynthesis && window.speechSynthesis.cancel();
+            _lastSpoken = '';
         }
 
         async function startLearning() {
@@ -230,6 +262,7 @@
             const status = document.getElementById('learnStatus');
             status.textContent = 'Starting…';
             status.style.color = '#00BDC6';
+            speak('Starting. Look at the camera and follow the instructions.');
             try {
                 const res  = await fetch('/api/entourage/start', {
                     method:  'POST',
@@ -238,17 +271,20 @@
                 });
                 const data = await res.json();
                 if (!res.ok || data.status !== 'started') {
-                    status.textContent = '✗ ' + (data.error || 'Could not start');
+                    const msg = '✗ ' + (data.error || 'Could not start');
+                    status.textContent = msg;
                     status.style.color = '#ff7070';
+                    speak(data.error || 'Could not start. Is the pipeline running?');
                     return;
                 }
                 document.getElementById('learnStartBtn').disabled = true;
                 document.getElementById('learnName').disabled     = true;
-                status.textContent = 'Follow the prompts shown in the video feed…';
+                status.textContent = 'Look at the camera…';
                 _pollLearningStatus();
             } catch (e) {
                 status.textContent = '✗ Network error — is the pipeline running?';
                 status.style.color = '#ff7070';
+                speak('Network error. Is the pipeline running?');
             }
         }
 
@@ -258,12 +294,16 @@
                     const res  = await fetch('/api/entourage/status');
                     const data = await res.json();
                     const status = document.getElementById('learnStatus');
-                    if (data.message) status.textContent = data.message;
+                    if (data.message) {
+                        status.textContent = data.message;
+                        speak(data.message);
+                    }
                     if (data.done) {
                         clearInterval(_learningPoll); _learningPoll = null;
                         status.textContent = '✓ Face saved!';
                         status.style.color = '#00BDC6';
-                        setTimeout(() => { closeLearnModal(); loadFriends(); }, 2000);
+                        speak('Face saved successfully.');
+                        setTimeout(() => { closeLearnModal(); loadFriends(); }, 2500);
                     } else if (!data.active && !data.done) {
                         clearInterval(_learningPoll); _learningPoll = null;
                     }
@@ -273,13 +313,26 @@
 
         async function cancelLearning() {
             await fetch('/api/entourage/cancel', { method: 'POST' }).catch(() => {});
+            speak('Cancelled.');
             closeLearnModal();
         }
 
         /* ── Init ────────────────────────────────────────────── */
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             loadFriends();
             loadCurrentProfile();
+
+            // Reconnect to a pipeline that was already running before this page loaded
+            try {
+                const res  = await fetch('/api/status');
+                const data = await res.json();
+                if (data.running) {
+                    statusEl.textContent  = 'running';
+                    startBtn.disabled     = true;
+                    stopBtn.disabled      = false;
+                    connectWebSockets();
+                }
+            } catch (e) { /* server not reachable — leave buttons in default state */ }
         });
     </script>
 </body>

@@ -373,7 +373,10 @@ class OllamaVLM(ModelAdapter):
     def _run_describe(self, snap: dict) -> Optional[str]:
         profile = snap.get("user_profile", {})
         verbosity = profile.get("verbosity", "standard")
-        language = profile.get("preferred_language", "en-US")
+        language  = profile.get("preferred_language", "en-US")
+        vision_profile = profile.get("vision_profile", "total_blindness")
+        profile_hint   = PROFILE_GUIDANCE.get(vision_profile,
+                                               PROFILE_GUIDANCE["total_blindness"])
 
         # System prompt — kept short on purpose. gemma3:1b can only reliably
         # hold a handful of instructions; long bullet lists get partly ignored.
@@ -384,6 +387,7 @@ class OllamaVLM(ModelAdapter):
             f"You are IRIS, narrating a scene to a blind user.\n"
             f"Length: {VERBOSITY_GUIDANCE.get(verbosity, VERBOSITY_GUIDANCE['standard'])}\n"
             f"Language: {language}. Second person ('you'). No greetings, no advice.\n"
+            f"Profile: {profile_hint}\n"
             "Use exact names from 'People in view'. Never invent names. "
             "Anyone unnamed is 'someone' or 'a person'.\n"
             "'Scene outline' is a structured keyword summary from a vision model — "

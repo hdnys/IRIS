@@ -5,6 +5,7 @@ Endpoints
 GET  /                  — serve index.html
 GET  /api/status        — running state + pool snapshot
 GET  /api/profiles      — available vision profiles
+GET  /api/cameras       — probe and return available camera indices
 GET  /api/friends       — registered people in data/
 POST /api/start         — start the pipeline (returns immediately; init runs in thread)
 POST /api/stop          — stop the pipeline
@@ -177,6 +178,12 @@ class PipelineRunner(threading.Thread):
     def learning_status(self) -> dict:
         with self._learner_lock:
             return dict(self._learn_status)
+
+    def update_user_profile(self, profile: dict) -> None:
+        """Push a user_profile patch to the live pool without restarting."""
+        pool = self._pool
+        if pool is not None:
+            pool.update_user_profile(profile)
 
     # ------------------------------------------------------------------
     # Background thread
@@ -410,6 +417,24 @@ async def get_friends():
     return {"friends": friends, "count": len(friends)}
 
 
+@app.get("/api/cameras")
+async def list_cameras():
+    """Probe camera indices 0–4 and return the ones OpenCV can open."""
+    import asyncio
+
+    def _probe() -> list[dict]:
+        found = []
+        for i in range(5):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                found.append({"index": i, "label": f"Camera {i}"})
+                cap.release()
+        return found
+
+    cameras = await asyncio.get_event_loop().run_in_executor(None, _probe)
+    return {"cameras": cameras}
+
+
 @app.post("/api/start")
 async def start_pipeline():
     global _runner
@@ -419,7 +444,8 @@ async def start_pipeline():
         try:
             with open(CONFIG_PATH) as f:
                 cfg = yaml.safe_load(f)
-            r = PipelineRunner(cfg)
+            camera_index = (cfg.get("pipeline") or {}).get("camera_index", 0)
+            r = PipelineRunner(cfg, camera_index=camera_index)
             r.start()
             _runner = r
         except Exception as e:
@@ -445,7 +471,11 @@ async def get_config():
 
 @app.post("/api/config")
 async def update_config(request: Request):
-    """Deep-merge the posted JSON into iris.yaml and save."""
+    """Deep-merge the posted JSON into iris.yaml and save.
+
+    If the payload contains ``user_profile`` and the pipeline is running the
+    change is applied immediately to the live DataPool — no restart needed.
+    """
     try:
         body = await request.json()
     except Exception as e:
@@ -457,6 +487,14 @@ async def update_config(request: Request):
         with open(CONFIG_PATH, "w") as f:
             yaml.dump(cfg, f, default_flow_style=False,
                       allow_unicode=True, sort_keys=False)
+
+        # Propagate user_profile changes to the running pipeline instantly.
+        if "user_profile" in body:
+            with _runner_lock:
+                r = _runner
+            if r is not None and r.is_alive():
+                r.update_user_profile(body["user_profile"])
+
         return {"status": "saved"}
     except Exception as e:
         return {"error": str(e), "status": "failed"}

@@ -42,6 +42,7 @@ pipeline:
   infer_cooldown_s: 9
   annotate_vlm_faces: true
   annotate_vlm_objects: true
+  camera_index: 0
 scene_gate:
   trigger_score: 0.55
   weights:
@@ -59,7 +60,7 @@ scene_gate:
   mobilenet_path: models/image_classification_mobilenetv2_2022apr.onnx
   download_if_missing: true
 user_profile:
-  vision_profile: total_blindness
+  vision_profile: tunnel_vision
   preferred_language: en-US
   verbosity: detailed
   known_people: []
