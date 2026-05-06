@@ -295,9 +295,21 @@
         }
 
         /* ── Init ────────────────────────────────────────────── */
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             loadFriends();
             loadCurrentProfile();
+
+            // Reconnect to a pipeline that was already running before this page loaded
+            try {
+                const res  = await fetch('/api/status');
+                const data = await res.json();
+                if (data.running) {
+                    statusEl.textContent  = 'running';
+                    startBtn.disabled     = true;
+                    stopBtn.disabled      = false;
+                    connectWebSockets();
+                }
+            } catch (e) { /* server not reachable — leave buttons in default state */ }
         });
     </script>
 </body>
