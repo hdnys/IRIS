@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>IRIS</title>
+    <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
+    <style>
+        body {
+            font-family: 'Instrument Serif';
+            font-size: 22px;
+            margin: 40px;
+            background: #233C5D;
+            background: radial-gradient(circle, rgba(35, 60, 93, 1) 0%, rgba(0, 189, 198, 1) 50%);
+        }
+
+        .title {
+            margin-top: 5px;
+            display: flex;
+            flex-direction: column;
+            text-align: center;
+            gap: 0px;
+        }
+
+        #h1 {
+            margin-top: 70px;
+            margin-bottom: auto;
+            color: #233C5D;
+            font-size: 50px;
+        }
+
+        .h2 {
+            margin-top: auto;
+            font-size: 30px;
+            color: #233C5D;
+            letter-spacing: 1px;
+        }
+
+        .h3 {
+            color: #00BDC6;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        h3 {
+            max-width: 200px;
+            font-family: 'Inter';
+            color: #FFFFFF;
+            font-size: 16px;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: row;
+            align-items: flex-start;
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+            gap: 50px;
+        }
+
+        .category {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .card {
+            padding: 20px;
+            max-width: 200px;
+            max-height: 250px;
+            background: #D9D9D9;
+            background: radial-gradient(circle, rgba(217, 217, 217, 1) 0%, rgba(255, 255, 255, 1) 50%);
+            border-radius: 5px;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #video {
+            width: 100%;
+            max-width: 500px;
+            border: 2px solid #233C5D;
+            margin: 10px 0;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            /* 3 colonnes égales */
+            gap: 20px;
+            /* espace entre les cards */
+        }
+
+        .photo {
+            width: 50px;
+            height: 50px;
+            background: #233C5D;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            padding: 10px;
+            background: #222;
+            margin: 10px 0;
+            border-left: 4px solid #233C5D;
+        }
+
+        .pool-viewer {
+            background: #0a0a0a;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>

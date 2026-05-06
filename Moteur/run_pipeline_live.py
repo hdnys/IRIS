@@ -591,7 +591,8 @@ def build_scene_gate(cfg: dict, sface_adapter) -> SceneGate:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(CONFIG_PATH))
-    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument("--camera", default="0",
+                        help="camera device ID (int, default 0) or path to video file")
     parser.add_argument("--no-gate", action="store_true",
                         help="disable the scene gate — submit every captured frame")
     parser.add_argument("--no-tts", action="store_true", help="disable TTS")
@@ -618,10 +619,16 @@ def main() -> None:
     print("Loading SceneGate (downloading MobileNet on first run)…")
     gate.load()
 
-    cap = cv2.VideoCapture(args.camera)
+    # Try to parse as int (camera device ID), otherwise treat as file path
+    try:
+        camera_id = int(args.camera)
+    except ValueError:
+        camera_id = args.camera
+    
+    cap = cv2.VideoCapture(camera_id)
     if not cap.isOpened():
         orch.shutdown()
-        raise SystemExit(f"Could not open camera {args.camera}")
+        raise SystemExit(f"Could not open camera/file: {args.camera}")
 
     print(f"Camera {args.camera} open. Warming up (15 frames)…")
     for _ in range(15):
