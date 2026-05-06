@@ -21,6 +21,10 @@ face-recognition
 # ── Text-to-speech ───────────────────────────────────────────────────────────
 pyttsx3
 
+# ── Web API (api_server.py) ───────────────────────────────────────────────────
+fastapi
+uvicorn[standard]
+
 # ── VLM adapter: Ollama / Gemma (active default) ─────────────────────────────
 # No extra Python deps — the adapter uses stdlib urllib only.
 # Requires the Ollama daemon running externally:

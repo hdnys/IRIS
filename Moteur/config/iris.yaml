@@ -1,72 +1,63 @@
 adapters:
   vlm:
     module: Moteur.adapters.vlm_ollama
-    class:  OllamaVLM
+    class: OllamaVLM
     params:
-      model:           llava-phi3      # multimodal — writes scene description
-      model_describe:  llama3.2      # text-only narrator
-      host:  http://127.0.0.1:11434
+      model: llava-phi3
+      model_describe: llama3.2
+      host: http://127.0.0.1:11434
       keep_alive: -1
       timeout_s: 120
-      max_image_side: 512             # llava-phi3 vision encoder; 512px is sufficient
+      max_image_side: 512
       num_ctx: 2048
-      temperature: 0.3               # mild variation, not chaotic
-      num_predict_static: 400         # structured outline needs more tokens than prose
-      num_predict_describe: null      # null = derive from user_profile.verbosity
-      departure_grace_s: 300          # mark a person gone only after 5 minutes absent
+      temperature: 0.3
+      num_predict_static: 400
+      num_predict_describe: null
+      departure_grace_s: 300
   object_detection:
     module: Moteur.adapters.objdet_yolo
-    class:  YoloObjectDetector
+    class: YoloObjectDetector
     params:
-      weights_path:    models/yolo12n.pt
-      conf_threshold:  0.25
-      iou_threshold:   0.45
-      max_image_side:  640
-      keep_classes:    null    # e.g. [2, 56] = car/chair only (whitelist)
-      exclude_classes: []      # persons included — YOLO is the headcount authority
-      device:          null    # null = let ultralytics auto-pick (cpu/mps/cuda)
-      verbose:         false
+      weights_path: models/yolo12n.pt
+      conf_threshold: 0.25
+      iou_threshold: 0.45
+      max_image_side: 640
+      keep_classes: null
+      exclude_classes: []
+      device: null
+      verbose: false
   face_recognition:
     module: Moteur.adapters.face_sface
-    class:  SFaceAdapter
+    class: SFaceAdapter
     params:
-      yunet_path:    models/face_detection_yunet_2023mar.onnx
-      sface_path:    models/face_recognition_sface_2021dec.onnx
-      gallery_dir:   data
-      cos_threshold: 0.3789   # tuned by Mohamed — lower = stricter
+      yunet_path: models/face_detection_yunet_2023mar.onnx
+      sface_path: models/face_recognition_sface_2021dec.onnx
+      gallery_dir: data
+      cos_threshold: 0.38
       det_confidence: 0.6
-      det_nms:        0.3
-      top_k:          5000
-
+      det_nms: 0.3
+      top_k: 5000
 pipeline:
   max_workers: 4
-  infer_cooldown_s: 10.0   # minimum seconds between consecutive inference triggers
-  annotate_vlm_faces:   true  # draw face boxes on the frame sent to the VLM
-  annotate_vlm_objects: true  # draw YOLO boxes on the frame sent to the VLM
-
-# Multi-signal scene-change detector (Moteur.core.scene_gate). All five
-# signals are normalized to [0, 1] and combined via the weights below;
-# inference fires when the combined score >= trigger_score.
+  infer_cooldown_s: 9
+  annotate_vlm_faces: true
+  annotate_vlm_objects: true
 scene_gate:
-  trigger_score: 0.56
+  trigger_score: 0.55
   weights:
-    dhash:        0.30   # pixel-level change (dHash hamming)
-    face_count:   0.15   # any change in number of faces detected (YuNet)
-    identity:     0.20   # set of recognized people changed
-    flow:         0.10   # instantaneous optical-flow motion
-    embedding:    0.20   # MobileNet logits cosine distance (semantic)
-    objects:      0.10   # YOLO label-set changed vs committed frame
-    person_count: 0.20   # YOLO person count changed (authoritative headcount)
+    dhash: 0.3
+    face_count: 0.15
+    identity: 0.2
+    flow: 0.1
+    embedding: 0.2
+    objects: 0.1
+    person_count: 0.2
   thresholds:
-    # Per-signal "max" values — used to normalize each raw signal to [0, 1]
-    # before weighting. Tuning rule of thumb: pick the value at which a
-    # signal is "definitely a scene change on its own".
-    dhash_max_bits: 64    # out of 256
-    flow_max:        5.0  # mean flow vector magnitude in pixels
-    embedding_max:   0.4  # 1 - cosine similarity, in [0, 2]
-  mobilenet_path:       models/image_classification_mobilenetv2_2022apr.onnx
-  download_if_missing:  true
-
+    dhash_max_bits: 64
+    flow_max: 5.0
+    embedding_max: 0.4
+  mobilenet_path: models/image_classification_mobilenetv2_2022apr.onnx
+  download_if_missing: true
 user_profile:
   vision_profile: total_blindness
   preferred_language: en-US

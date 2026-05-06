@@ -4,16 +4,16 @@
 <head>
     <title>IRIS</title>
     <link rel="stylesheet" href="/interface/css/index.css">
-    <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css?family=Instrument+Serif' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
 </head>
 
 <body>
     <div class="header">
         <button id="settingsBtn" class="headerbtn" onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
-        <button id="aboutBtn" class="headerbtn" onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
-        <button id="contactBtn" class="headerbtn" onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
-        <button id="closedonesBtn" class="headerbtn" onclick="window.location.href='/interface/html/closedones.html'">CLOSED ONES</button>
+        <button id="aboutBtn"    class="headerbtn" onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
+        <button id="contactBtn"  class="headerbtn" onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
+        <button id="entourageBtn" class="headerbtn" onclick="window.location.href='/interface/html/closedones.html'">ENTOURAGE</button>
     </div>
 
     <div class="title">
@@ -21,59 +21,98 @@
         <p class="h2" id="h2">INTELLIGENT RESOURCE FOR SHORT-SIGHTED INDIVIDUAL</p>
     </div>
 
+    <!-- ── Main content row ────────────────────────────────── -->
     <div class="container">
+
+        <!-- Visual deficiency — clickable card -->
         <div class="category">
             <h3>YOUR VISUAL DEFICIENCY</h3>
-            <div class="card">
-                <p class=" h3" id="visual deficiency">Total Blindness</p>
-                <p>Total Blindness is a condition where an individual has no light perception.</p>
+            <div class="card clickable-card"
+                 onclick="window.location.href='/interface/html/visualdeficiency.html'"
+                 title="Click to change your visual profile">
+                <p class="h3" id="profileLabel" style="margin-top:20px;">Loading…</p>
+                <p id="profileDesc" style="font-size:14px; color:#555;">—</p>
+                <p class="change-hint">Tap to change →</p>
             </div>
         </div>
 
-        <canvas id="video" width="640" height="480" style="border: 2px solid #233C5D;"></canvas>
+        <!-- Camera feed -->
+        <canvas id="video" width="640" height="480"></canvas>
 
+        <!-- Entourage -->
         <div class="category">
-            <h3>YOUR CLOSED ONES</h3>
+            <h3>YOUR ENTOURAGE</h3>
             <div class="grid" id="friendsGrid">
-                <!-- Friends will be loaded here by JavaScript -->
+                <!-- populated by JS -->
             </div>
-
+            <a class="see-all" href="/interface/html/closedones.html">View all →</a>
+            <button class="add-btn" onclick="openLearnModal()">+ Add</button>
         </div>
 
     </div>
 
-    <div>
-        <button id="startBtn" onclick="startPipeline()">▶️ Start</button>
-        <button id="stopBtn" onclick="stopPipeline()" disabled>⏹️ Stop</button>
+    <!-- ── Controls ────────────────────────────────────────── -->
+    <div style="text-align:center; margin-top:18px;">
+        <button id="startBtn" onclick="startPipeline()">▶ Start</button>
+        <button id="stopBtn"  onclick="stopPipeline()" disabled>⏹ Stop</button>
     </div>
 
     <div class="status">
         Status: <span id="status">stopped</span>
     </div>
 
-    <h3>Pool State (Real-time)</h3>
-    <div class="pool-viewer" id="poolViewer">{...}</div>
+    <h3 style="max-width:100%; color:#ccc;">Pool State (Real-time)</h3>
+    <div class="pool-viewer" id="poolViewer">{…}</div>
+
+    <!-- ── Add-to-entourage modal ───────────────────────────── -->
+    <div id="learnModal" class="modal-overlay" style="display:none;"
+         onclick="if(event.target===this) cancelLearning()">
+        <div class="modal-box">
+            <div class="modal-title">Add to Entourage</div>
+            <p class="modal-desc">
+                The pipeline must be running.<br>
+                IRIS will guide you through 5 head poses.
+            </p>
+            <input class="modal-input" type="text" id="learnName"
+                   placeholder="First name" maxlength="30"
+                   onkeydown="if(event.key==='Enter') startLearning()">
+            <div id="learnStatus" class="modal-status"></div>
+            <div class="modal-actions">
+                <button class="modal-btn-start" id="learnStartBtn" onclick="startLearning()">Start →</button>
+                <button class="modal-btn-cancel" onclick="cancelLearning()">Cancel</button>
+            </div>
+        </div>
+    </div>
 
     <script>
-        const canvas = document.getElementById('video');
-        const ctx = canvas.getContext('2d');
+        /* ── Profile lookup ──────────────────────────────────── */
+        const PROFILES = {
+            total_blindness: { label: 'Total Blindness', desc: 'No light perception' },
+            low_vision:      { label: 'Low Vision',      desc: 'Some residual vision' },
+            tunnel_vision:   { label: 'Tunnel Vision',   desc: 'Central vision only' },
+            color_blindness: { label: 'Color Blindness', desc: 'Cannot distinguish colors' },
+            peripheral_loss: { label: 'Peripheral Loss', desc: 'Reduced side vision' },
+        };
+
+        /* ── WebSocket / pipeline ────────────────────────────── */
+        const canvas   = document.getElementById('video');
+        const ctx      = canvas.getContext('2d');
         const statusEl = document.getElementById('status');
         const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
+        const stopBtn  = document.getElementById('stopBtn');
         let videoWs = null;
-        let poolWs = null;
+        let poolWs  = null;
 
-        // Get the current hostname and port for WebSocket connections
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}`;
+        const wsUrl    = `${protocol}//${window.location.host}`;
 
         async function startPipeline() {
-            const res = await fetch('/api/start', { method: 'POST' });
+            const res  = await fetch('/api/start', { method: 'POST' });
             const data = await res.json();
-            if (res.ok) {
+            if (res.ok && data.status !== 'failed') {
                 statusEl.textContent = 'running';
                 startBtn.disabled = true;
-                stopBtn.disabled = false;
+                stopBtn.disabled  = false;
                 connectWebSockets();
             } else {
                 alert('Error: ' + (data.error || 'Unknown error'));
@@ -85,81 +124,163 @@
             if (res.ok) {
                 statusEl.textContent = 'stopped';
                 startBtn.disabled = false;
-                stopBtn.disabled = true;
+                stopBtn.disabled  = true;
                 if (videoWs) videoWs.close();
-                if (poolWs) poolWs.close();
+                if (poolWs)  poolWs.close();
             }
         }
 
         function connectWebSockets() {
-            // Video stream
             videoWs = new WebSocket(`${wsUrl}/ws/video`);
             videoWs.binaryType = 'arraybuffer';
             videoWs.onmessage = (event) => {
                 const blob = new Blob([event.data]);
-                const url = URL.createObjectURL(blob);
-                const img = new Image();
-                img.onload = () => {
-                    ctx.drawImage(img, 0, 0);
-                    URL.revokeObjectURL(url);
-                };
+                const url  = URL.createObjectURL(blob);
+                const img  = new Image();
+                img.onload = () => { ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
                 img.onerror = () => URL.revokeObjectURL(url);
                 img.src = url;
             };
-            videoWs.onerror = (err) => console.error('Video WS error:', err);
+            videoWs.onerror = (e) => console.error('Video WS error:', e);
 
-            // Pool updates
             poolWs = new WebSocket(`${wsUrl}/ws/pool`);
             poolWs.onmessage = (event) => {
                 try {
                     document.getElementById('poolViewer').textContent =
                         JSON.stringify(JSON.parse(event.data), null, 2);
-                } catch (e) {
-                    console.error('Failed to parse pool data:', e);
-                }
+                } catch (e) { /* ignore */ }
             };
-            poolWs.onerror = (err) => console.error('Pool WS error:', err);
+            poolWs.onerror = (e) => console.error('Pool WS error:', e);
         }
 
-        // Load registered friends on page load
-        async function loadFriends() {
+        /* ── Current visual-deficiency profile ───────────────── */
+        async function loadCurrentProfile() {
             try {
-                const res = await fetch('/api/friends');
-                const data = await res.json();
-                const friendsGrid = document.getElementById('friendsGrid');
-                friendsGrid.innerHTML = '';
-
-                if (data.friends && data.friends.length > 0) {
-                    data.friends.forEach(friend => {
-                        const card = document.createElement('div');
-                        card.className = 'card';
-                        
-                        // Get random image
-                        let photoHTML = `<div class="photo" style="background: linear-gradient(135deg, #00BDC6, #233C5D); display: flex; align-items: center; justify-content: center;"><span style="color: white; font-weight: bold;">${friend.name.charAt(0).toUpperCase()}</span></div>`;
-                        
-                        if (friend.images && friend.images.length > 0) {
-                            const randomImage = friend.images[Math.floor(Math.random() * friend.images.length)];
-                            const imageUrl = `/data/${friend.name}/${randomImage}`;
-                            photoHTML = `<img src="${imageUrl}" alt="${friend.name}" style="width: 100%; height: 200px; object-fit: cover; border-radius: 5px 5px 0 0;" onerror="this.parentElement.style.background='linear-gradient(135deg, #00BDC6, #233C5D)'; this.style.display='none';">`;
-                        }
-                        
-                        card.innerHTML = `
-                            ${photoHTML}
-                            <p class="h3" style="margin-top: 10px;">${friend.name}</p>
-                            <p style="font-size: 12px; color: #ccc; margin: 0;">${friend.count} image(s)</p>
-                        `;
-                        friendsGrid.appendChild(card);
-                    });
-                } else {
-                    friendsGrid.innerHTML = '<p style="grid-column: 1/-1; color: #fff;">No registered friends yet</p>';
-                }
-            } catch (err) {
-                console.error('Error loading friends:', err);
+                const res = await fetch('/api/config');
+                if (!res.ok) return;
+                const cfg = await res.json();
+                const key = cfg.user_profile?.vision_profile || 'total_blindness';
+                const p   = PROFILES[key] || { label: key, desc: '' };
+                document.getElementById('profileLabel').textContent = p.label;
+                document.getElementById('profileDesc').textContent  = p.desc;
+            } catch (e) {
+                document.getElementById('profileLabel').textContent = 'Total Blindness';
+                document.getElementById('profileDesc').textContent  = '';
             }
         }
 
-        // Load friends when page loads
-        document.addEventListener('DOMContentLoaded', loadFriends);
+        /* ── Entourage grid (compact thumbnails) ─────────────── */
+        async function loadFriends() {
+            try {
+                const res  = await fetch('/api/friends');
+                const data = await res.json();
+                const grid = document.getElementById('friendsGrid');
+                grid.innerHTML = '';
+
+                const friends = (data.friends || []).slice(0, 4); // show max 4 on home
+                if (friends.length === 0) {
+                    grid.innerHTML =
+                        '<p style="grid-column:1/-1;color:#fff;font-size:12px;font-family:Inter">None yet</p>';
+                    return;
+                }
+
+                friends.forEach(friend => {
+                    const card = document.createElement('div');
+                    card.className = 'friend-mini';
+                    if (friend.images && friend.images.length > 0) {
+                        const src = `/data/${friend.name}/${friend.images[0]}`;
+                        card.innerHTML =
+                            `<img src="${src}" alt="${friend.name}"
+                                  onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                             <span class="initial" style="display:none">${friend.name[0].toUpperCase()}</span>
+                             <span>${friend.name}</span>`;
+                    } else {
+                        card.innerHTML =
+                            `<span class="initial">${friend.name[0].toUpperCase()}</span>
+                             <span>${friend.name}</span>`;
+                    }
+                    grid.appendChild(card);
+                });
+            } catch (e) {
+                console.error('Error loading friends:', e);
+            }
+        }
+
+        /* ── Add-to-entourage modal ──────────────────────────── */
+        let _learningPoll = null;
+
+        function openLearnModal() {
+            document.getElementById('learnModal').style.display  = 'flex';
+            document.getElementById('learnName').value           = '';
+            document.getElementById('learnStatus').textContent   = '';
+            document.getElementById('learnStatus').style.color   = '#00BDC6';
+            document.getElementById('learnStartBtn').disabled    = false;
+            document.getElementById('learnName').disabled        = false;
+            document.getElementById('learnName').focus();
+        }
+
+        function closeLearnModal() {
+            document.getElementById('learnModal').style.display = 'none';
+            if (_learningPoll) { clearInterval(_learningPoll); _learningPoll = null; }
+        }
+
+        async function startLearning() {
+            const name   = document.getElementById('learnName').value.trim();
+            if (!name) return;
+            const status = document.getElementById('learnStatus');
+            status.textContent = 'Starting…';
+            status.style.color = '#00BDC6';
+            try {
+                const res  = await fetch('/api/entourage/start', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ name }),
+                });
+                const data = await res.json();
+                if (!res.ok || data.status !== 'started') {
+                    status.textContent = '✗ ' + (data.error || 'Could not start');
+                    status.style.color = '#ff7070';
+                    return;
+                }
+                document.getElementById('learnStartBtn').disabled = true;
+                document.getElementById('learnName').disabled     = true;
+                status.textContent = 'Follow the prompts shown in the video feed…';
+                _pollLearningStatus();
+            } catch (e) {
+                status.textContent = '✗ Network error — is the pipeline running?';
+                status.style.color = '#ff7070';
+            }
+        }
+
+        function _pollLearningStatus() {
+            _learningPoll = setInterval(async () => {
+                try {
+                    const res  = await fetch('/api/entourage/status');
+                    const data = await res.json();
+                    const status = document.getElementById('learnStatus');
+                    if (data.message) status.textContent = data.message;
+                    if (data.done) {
+                        clearInterval(_learningPoll); _learningPoll = null;
+                        status.textContent = '✓ Face saved!';
+                        status.style.color = '#00BDC6';
+                        setTimeout(() => { closeLearnModal(); loadFriends(); }, 2000);
+                    } else if (!data.active && !data.done) {
+                        clearInterval(_learningPoll); _learningPoll = null;
+                    }
+                } catch (e) { /* ignore transient errors */ }
+            }, 800);
+        }
+
+        async function cancelLearning() {
+            await fetch('/api/entourage/cancel', { method: 'POST' }).catch(() => {});
+            closeLearnModal();
+        }
+
+        /* ── Init ────────────────────────────────────────────── */
+        document.addEventListener('DOMContentLoaded', () => {
+            loadFriends();
+            loadCurrentProfile();
+        });
     </script>
 </body>
 
