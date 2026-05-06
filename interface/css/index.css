@@ -165,13 +165,13 @@ button:disabled {
 .video-wrap {
     position: relative;
     display: inline-block;
-    max-width: 960px;
+    max-width: 720px;
     width: 100%;
 }
 
 #video {
     width: 100%;
-    display: block;
+    max-width: 820px;
     border: 2px solid #233C5D;
 }
 
