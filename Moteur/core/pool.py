@@ -166,6 +166,11 @@ class DataPool:
                 "status": status,
             }
 
+    def update_user_profile(self, profile: dict) -> None:
+        """Merge ``profile`` into the live user_profile. Takes effect on the next snapshot."""
+        with self._lock:
+            self._state["user_profile"].update(profile)
+
     def validate(self) -> None:
         """Validate the schema-covered subset of the pool.
 

@@ -179,6 +179,12 @@ class PipelineRunner(threading.Thread):
         with self._learner_lock:
             return dict(self._learn_status)
 
+    def update_user_profile(self, profile: dict) -> None:
+        """Push a user_profile patch to the live pool without restarting."""
+        pool = self._pool
+        if pool is not None:
+            pool.update_user_profile(profile)
+
     # ------------------------------------------------------------------
     # Background thread
     # ------------------------------------------------------------------
@@ -465,7 +471,11 @@ async def get_config():
 
 @app.post("/api/config")
 async def update_config(request: Request):
-    """Deep-merge the posted JSON into iris.yaml and save."""
+    """Deep-merge the posted JSON into iris.yaml and save.
+
+    If the payload contains ``user_profile`` and the pipeline is running the
+    change is applied immediately to the live DataPool — no restart needed.
+    """
     try:
         body = await request.json()
     except Exception as e:
@@ -477,6 +487,14 @@ async def update_config(request: Request):
         with open(CONFIG_PATH, "w") as f:
             yaml.dump(cfg, f, default_flow_style=False,
                       allow_unicode=True, sort_keys=False)
+
+        # Propagate user_profile changes to the running pipeline instantly.
+        if "user_profile" in body:
+            with _runner_lock:
+                r = _runner
+            if r is not None and r.is_alive():
+                r.update_user_profile(body["user_profile"])
+
         return {"status": "saved"}
     except Exception as e:
         return {"error": str(e), "status": "failed"}
