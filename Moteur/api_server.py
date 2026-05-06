@@ -61,10 +61,12 @@ def get_registered_friends():
             if person_dir.is_dir():
                 images = list(person_dir.glob("*.jpg")) + list(person_dir.glob("*.png"))
                 if images:
+                    image_names = [img.name for img in images]
                     friends.append({
                         "name": person_dir.name,
                         "count": len(images),
-                        "path": str(person_dir.relative_to(data_dir.parent))
+                        "path": str(person_dir.relative_to(data_dir.parent)),
+                        "images": image_names
                     })
     return sorted(friends, key=lambda x: x["name"])
 
@@ -96,6 +98,14 @@ if interface_dir.exists():
     print(f"✓ Serving static files from {interface_dir}")
 else:
     print(f"⚠ Interface directory not found: {interface_dir}")
+
+# Serve data files (friend photos)
+data_dir = Path(__file__).parent.parent / "data"
+if data_dir.exists():
+    app.mount("/data", StaticFiles(directory=data_dir), name="data")
+    print(f"✓ Serving data files from {data_dir}")
+else:
+    print(f"⚠ Data directory not found: {data_dir}")
 
 @app.get("/")
 async def root():
@@ -138,7 +148,7 @@ async def set_profile(profile: str):
 
 @app.get("/api/friends")
 async def get_friends():
-    """Lister les amis enregistrés."""
+    """Lister les amis enregistrés avec leurs images."""
     friends = get_registered_friends()
     return {
         "friends": friends,

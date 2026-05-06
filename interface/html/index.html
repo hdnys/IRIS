@@ -3,135 +3,18 @@
 
 <head>
     <title>IRIS</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/interface/css/index.css">
     <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
-    <style>
-        body {
-            font-family: 'Instrument Serif';
-            font-size: 22px;
-            margin: 40px;
-            background: #233C5D;
-            background: radial-gradient(circle, rgba(35, 60, 93, 1) 0%, rgba(0, 189, 198, 1) 50%);
-        }
-
-        .title {
-            margin-top: 5px;
-            display: flex;
-            flex-direction: column;
-            text-align: center;
-            gap: 0px;
-        }
-
-        #h1 {
-            margin-top: 70px;
-            margin-bottom: auto;
-            color: #233C5D;
-            font-size: 50px;
-        }
-
-        .h2 {
-            margin-top: auto;
-            font-size: 30px;
-            color: #233C5D;
-            letter-spacing: 1px;
-        }
-
-        .h3 {
-            color: #00BDC6;
-            font-size: 28px;
-            margin-bottom: 10px;
-        }
-
-        h3 {
-            max-width: 200px;
-            font-family: 'Inter';
-            color: #FFFFFF;
-            font-size: 16px;
-            margin-bottom: 10px;
-            letter-spacing: 1px;
-        }
-
-        .container {
-            display: flex;
-            flex-direction: row;
-            align-items: flex-start;
-            max-width: 1200px;
-            margin: 0 auto;
-            text-align: center;
-            gap: 50px;
-        }
-
-        .category {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 2px;
-        }
-
-        .card {
-            padding: 20px;
-            max-width: 200px;
-            max-height: 250px;
-            background: #D9D9D9;
-            background: radial-gradient(circle, rgba(217, 217, 217, 1) 0%, rgba(255, 255, 255, 1) 50%);
-            border-radius: 5px;
-        }
-
-        button {
-            padding: 10px 20px;
-            margin: 5px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        #video {
-            width: 100%;
-            max-width: 500px;
-            border: 2px solid #233C5D;
-            margin: 10px 0;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            /* 3 colonnes égales */
-            gap: 20px;
-            /* espace entre les cards */
-        }
-
-        .photo {
-            width: 50px;
-            height: 50px;
-            background: #233C5D;
-            margin-bottom: 10px;
-        }
-
-        .status {
-            padding: 10px;
-            background: #222;
-            margin: 10px 0;
-            border-left: 4px solid #233C5D;
-        }
-
-        .pool-viewer {
-            background: #0a0a0a;
-            padding: 10px;
-            margin: 10px 0;
-            max-height: 300px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
-        }
-    </style>
 </head>
 
 <body>
+    <div class="header">
+        <button id="settingsBtn" class="headerbtn" onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
+        <button id="aboutBtn" class="headerbtn" onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
+        <button id="contactBtn" class="headerbtn" onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
+        <button id="closedonesBtn" class="headerbtn" onclick="window.location.href='/interface/html/closedones.html'">CLOSED ONES</button>
+    </div>
 
     <div class="title">
         <p id="h1">Iris</p>
@@ -151,19 +34,8 @@
 
         <div class="category">
             <h3>YOUR CLOSED ONES</h3>
-            <div class="grid">
-                <div class="card" id="closed ones">
-                    <div class="photo"></div>
-                    <p class="h3">NAME</p>
-                </div>
-                <div class="card" id="closed ones">
-                    <div class="photo"></div>
-                    <p class="h3">NAME</p>
-                </div>
-                <div class="card" id="closed ones">
-                    <div class="photo"></div>
-                    <p class="h3">NAME</p>
-                </div>
+            <div class="grid" id="friendsGrid">
+                <!-- Friends will be loaded here by JavaScript -->
             </div>
 
         </div>
@@ -248,6 +120,46 @@
             };
             poolWs.onerror = (err) => console.error('Pool WS error:', err);
         }
+
+        // Load registered friends on page load
+        async function loadFriends() {
+            try {
+                const res = await fetch('/api/friends');
+                const data = await res.json();
+                const friendsGrid = document.getElementById('friendsGrid');
+                friendsGrid.innerHTML = '';
+
+                if (data.friends && data.friends.length > 0) {
+                    data.friends.forEach(friend => {
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        
+                        // Get random image
+                        let photoHTML = `<div class="photo" style="background: linear-gradient(135deg, #00BDC6, #233C5D); display: flex; align-items: center; justify-content: center;"><span style="color: white; font-weight: bold;">${friend.name.charAt(0).toUpperCase()}</span></div>`;
+                        
+                        if (friend.images && friend.images.length > 0) {
+                            const randomImage = friend.images[Math.floor(Math.random() * friend.images.length)];
+                            const imageUrl = `/data/${friend.name}/${randomImage}`;
+                            photoHTML = `<img src="${imageUrl}" alt="${friend.name}" style="width: 100%; height: 200px; object-fit: cover; border-radius: 5px 5px 0 0;" onerror="this.parentElement.style.background='linear-gradient(135deg, #00BDC6, #233C5D)'; this.style.display='none';">`;
+                        }
+                        
+                        card.innerHTML = `
+                            ${photoHTML}
+                            <p class="h3" style="margin-top: 10px;">${friend.name}</p>
+                            <p style="font-size: 12px; color: #ccc; margin: 0;">${friend.count} image(s)</p>
+                        `;
+                        friendsGrid.appendChild(card);
+                    });
+                } else {
+                    friendsGrid.innerHTML = '<p style="grid-column: 1/-1; color: #fff;">No registered friends yet</p>';
+                }
+            } catch (err) {
+                console.error('Error loading friends:', err);
+            }
+        }
+
+        // Load friends when page loads
+        document.addEventListener('DOMContentLoaded', loadFriends);
     </script>
 </body>
 

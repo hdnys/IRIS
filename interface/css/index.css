@@ -24,14 +24,14 @@ body {
 #h1 {
     margin-top: 50px;
     margin-bottom: auto;
-    color: #FFFFFF;
+    color: #233C5D;
     font-size: 50px;
 }
 
 .h2 {
     margin-top: auto;
     font-size: 30px;
-    color: #FFFFFF;
+    color: #233C5D;
     letter-spacing: 1px;
 }
 
@@ -52,12 +52,19 @@ h3 {
 
 .container {
     display: flex;
-    flex-direction: column;
-    justify-content: center;
+    flex-direction: row;
+    align-items: flex-start;
     max-width: 1200px;
     margin: 0 auto;
     text-align: center;
     gap: 50px;
+}
+
+.category {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
 }
 
 .card {
@@ -107,4 +114,43 @@ button {
 button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+#video {
+    width: 100%;
+    max-width: 500px;
+    border: 2px solid #233C5D;
+    margin: 10px 0;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    /* 3 colonnes égales */
+    gap: 20px;
+    /* espace entre les cards */
+}
+
+.photo {
+    width: 50px;
+    height: 50px;
+    background: #233C5D;
+    margin-bottom: 10px;
+}
+
+.status {
+    padding: 10px;
+    background: #222;
+    margin: 10px 0;
+    border-left: 4px solid #233C5D;
+}
+
+.pool-viewer {
+    background: #0a0a0a;
+    padding: 10px;
+    margin: 10px 0;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 12px;
 }
