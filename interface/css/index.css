@@ -164,7 +164,7 @@ button:disabled {
 /* ── Camera canvas ─────────────────────────────────────────── */
 #video {
     width: 100%;
-    max-width: 960px;
+    max-width: 820px;
     border: 2px solid #233C5D;
     margin: 10px 0;
 }
