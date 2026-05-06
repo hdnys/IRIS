@@ -40,6 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from Moteur.core.orchestrator import Orchestrator
 from Moteur.core.pool import DataPool
 from Moteur.core.registry import AdapterRegistry
+from Moteur.core.face_learner import FaceLearner
 from Moteur.run_pipeline_live import (
     GateWorker,
     InferenceWorker,
@@ -47,6 +48,7 @@ from Moteur.run_pipeline_live import (
     TTSWorker,
     build_scene_gate,
     draw_face_boxes,
+    draw_learn_overlay,
     draw_object_boxes,
     draw_overlay,
 )
@@ -130,6 +132,13 @@ class PipelineRunner(threading.Thread):
         self._latest_jpeg:  Optional[bytes]   = None
         self._pool:         Optional[DataPool] = None  # set once init completes
 
+        # Face-learning mode — populated in run() once models are ready.
+        self._learner_lock  = threading.Lock()
+        self._learner: Optional[FaceLearner] = None
+        self._learn_status: dict = {"active": False, "name": "", "message": "", "done": False}
+        self._sface_ref     = None
+        self._gallery_dir   = Path("data")
+
     # ------------------------------------------------------------------
     # Public accessors (called from async context)
     # ------------------------------------------------------------------
@@ -144,6 +153,30 @@ class PipelineRunner(threading.Thread):
 
     def stop(self) -> None:
         self._stop_evt.set()
+
+    def start_learning(self, name: str) -> bool:
+        """Enter face-learning mode for ``name``. Returns False if busy or not ready."""
+        with self._learner_lock:
+            if self._learner is not None or self._sface_ref is None:
+                return False
+            self._learner = FaceLearner(
+                name=name,
+                sface_adapter=self._sface_ref,
+                speak=lambda t: None,   # no TTS through the web path
+                gallery_dir=self._gallery_dir,
+            )
+            self._learn_status = {"active": True, "name": name,
+                                  "message": "Starting…", "done": False}
+        return True
+
+    def cancel_learning(self) -> None:
+        with self._learner_lock:
+            self._learner = None
+            self._learn_status = {"active": False, "name": "", "message": "", "done": False}
+
+    def learning_status(self) -> dict:
+        with self._learner_lock:
+            return dict(self._learn_status)
 
     # ------------------------------------------------------------------
     # Background thread
@@ -166,6 +199,11 @@ class PipelineRunner(threading.Thread):
                                 max_workers=pipeline_cfg.get("max_workers", 4))
 
         sface = registry.get("face_recognition")
+        self._sface_ref   = sface
+        self._gallery_dir = Path(
+            cfg.get("adapters", {}).get("face_recognition", {})
+               .get("params", {}).get("gallery_dir", "data")
+        )
         gate  = build_scene_gate(cfg, sface)
 
         print("[pipeline] Loading SceneGate (may download MobileNet on first run)…")
@@ -204,6 +242,25 @@ class PipelineRunner(threading.Thread):
                 if not ok:
                     print("[pipeline] Camera read failed — stopping.")
                     break
+
+                # Learning mode — takes full priority; skip normal pipeline.
+                with self._learner_lock:
+                    learner = self._learner
+                if learner is not None:
+                    message, done = learner.step(frame)
+                    with self._learner_lock:
+                        self._learn_status["message"] = message
+                        if done:
+                            self._learner = None
+                            self._learn_status.update(
+                                {"active": False, "done": True, "message": message}
+                            )
+                    display = draw_learn_overlay(frame, learner.name, message)
+                    _, buf = cv2.imencode(".jpg", display,
+                                         [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    with self._frame_lock:
+                        self._latest_jpeg = buf.tobytes()
+                    continue
 
                 # SFace on every frame so face boxes track live motion.
                 try:
@@ -414,6 +471,49 @@ async def stop_pipeline():
         r.stop()
         # Don't join here — it can take a few seconds; let it wind down.
     return {"status": "stopped"}
+
+
+# ---------------------------------------------------------------------------
+# Entourage / face-learning routes
+# ---------------------------------------------------------------------------
+
+@app.post("/api/entourage/start")
+async def start_entourage_learning(request: Request):
+    """Begin guided face capture for a new entourage member."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"error": "Invalid JSON", "status": "failed"}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return {"error": "Name is required", "status": "failed"}
+    with _runner_lock:
+        r = _runner
+    if r is None or not r.is_alive():
+        return {"error": "Pipeline is not running — start it from the home page first",
+                "status": "failed"}
+    if not r.start_learning(name):
+        return {"error": "Already in learning mode, or models not ready yet",
+                "status": "failed"}
+    return {"status": "started", "name": name}
+
+
+@app.post("/api/entourage/cancel")
+async def cancel_entourage_learning():
+    with _runner_lock:
+        r = _runner
+    if r:
+        r.cancel_learning()
+    return {"status": "cancelled"}
+
+
+@app.get("/api/entourage/status")
+async def entourage_learning_status():
+    with _runner_lock:
+        r = _runner
+    if r is None:
+        return {"active": False, "done": False, "message": ""}
+    return r.learning_status()
 
 
 # ---------------------------------------------------------------------------

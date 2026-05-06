@@ -2,30 +2,203 @@
 <html>
 
 <head>
-    <title>IRIS - Visual Deficiency</title>
-    <link rel="stylesheet" href="/interface/css/visualdeficiency.css">
-    <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
+    <title>IRIS - Visual Profile</title>
+    <link rel="stylesheet" href="/interface/css/closedones.css">
+    <link href='https://fonts.googleapis.com/css?family=Instrument+Serif' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
+    <style>
+        body { color: #fff; }
+
+        .profile-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 24px;
+            max-width: 860px;
+            margin: 40px auto 0;
+            padding: 0 20px;
+        }
+
+        .profile-btn {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            height: 220px;
+            border-radius: 18px;
+            cursor: pointer;
+            border: 2px solid rgba(255, 255, 255, 0.15) !important;
+            background: rgba(0, 20, 50, 0.6);
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+            padding: 28px;
+            text-align: center;
+            /* remove inherited button styles */
+            font-family: 'Instrument Serif';
+            margin: 0;
+        }
+
+        .profile-btn:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 16px 40px rgba(0, 189, 198, 0.35);
+            border-color: rgba(0, 189, 198, 0.7) !important;
+            background: rgba(0, 189, 198, 0.1) !important;
+        }
+
+        .profile-btn.selected {
+            border-color: #00BDC6 !important;
+            background: rgba(0, 189, 198, 0.15) !important;
+            box-shadow: 0 0 0 3px rgba(0, 189, 198, 0.3);
+        }
+
+        .profile-icon {
+            font-size: 52px;
+            line-height: 1;
+        }
+
+        .profile-name {
+            font-size: 40px;
+            color: #fff;
+            line-height: 1.1;
+        }
+
+        .profile-desc {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.55);
+            line-height: 1.4;
+        }
+
+        .current-badge {
+            position: absolute;
+            top: 14px;
+            right: 18px;
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: #00BDC6;
+            background: rgba(0, 189, 198, 0.12);
+            border: 1px solid rgba(0, 189, 198, 0.4);
+            border-radius: 50px;
+            padding: 3px 10px;
+            display: none;
+        }
+
+        .profile-btn.selected .current-badge { display: block; }
+
+        #saveMsg {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            color: #00BDC6;
+            text-align: center;
+            margin-top: 24px;
+            min-height: 20px;
+        }
+
+        #saveMsg.err { color: #ff7070; }
+    </style>
 </head>
 
 <body>
     <div class="header">
-        <button id="closedonesBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/index.html'">HOME</button>
-        <button id="settingsBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
-        <button id="aboutBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
-        <button id="contactBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
-
+        <button class="headerbtn" onclick="window.location.href='/interface/html/index.html'">HOME</button>
+        <button class="headerbtn" onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
+        <button class="headerbtn" onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
+        <button class="headerbtn" onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
     </div>
 
     <div class="title">
-        <p id="h1">Your Visual Deficiency Profile</p>
-        <p class="h2" id="h2">INTELLIGENT RESOURCE FOR SHORT-SIGHTED INDIVIDUAL</p>
+        <p id="h1">Visual Profile</p>
+        <p class="h2" id="h2">SELECT YOUR VISUAL CONDITION</p>
     </div>
 
-    <div class="container">
+    <div class="profile-grid">
+
+        <button class="profile-btn" id="btn-total_blindness"
+                onclick="selectProfile('total_blindness')">
+            <span class="current-badge">CURRENT</span>
+            <span class="profile-icon">⬛</span>
+            <span class="profile-name">Total Blindness</span>
+            <span class="profile-desc">No light perception — full scene narration with maximum detail</span>
+        </button>
+
+        <button class="profile-btn" id="btn-low_vision"
+                onclick="selectProfile('low_vision')">
+            <span class="current-badge">CURRENT</span>
+            <span class="profile-icon">🔅</span>
+            <span class="profile-name">Low Vision</span>
+            <span class="profile-desc">Some residual vision — descriptions focus on clarity and contrast</span>
+        </button>
+
+        <button class="profile-btn" id="btn-tunnel_vision"
+                onclick="selectProfile('tunnel_vision')">
+            <span class="current-badge">CURRENT</span>
+            <span class="profile-icon">◎</span>
+            <span class="profile-name">Tunnel Vision</span>
+            <span class="profile-desc">Central vision only — emphasis on peripheral context and edges</span>
+        </button>
+
+        <button class="profile-btn" id="btn-color_blindness"
+                onclick="selectProfile('color_blindness')">
+            <span class="current-badge">CURRENT</span>
+            <span class="profile-icon">◑</span>
+            <span class="profile-name">Color Blindness</span>
+            <span class="profile-desc">Cannot distinguish colors — descriptions use shape, texture and contrast</span>
+        </button>
 
     </div>
+
+    <div id="saveMsg"></div>
+
+    <script>
+        let _currentProfile = null;
+
+        async function loadCurrentProfile() {
+            try {
+                const res = await fetch('/api/config');
+                if (!res.ok) return;
+                const cfg = await res.json();
+                _currentProfile = cfg.user_profile?.vision_profile;
+                if (_currentProfile) markSelected(_currentProfile);
+            } catch (e) { /* server not running */ }
+        }
+
+        function markSelected(key) {
+            document.querySelectorAll('.profile-btn').forEach(b => b.classList.remove('selected'));
+            const btn = document.getElementById('btn-' + key);
+            if (btn) btn.classList.add('selected');
+        }
+
+        async function selectProfile(key) {
+            const msg = document.getElementById('saveMsg');
+            msg.textContent = 'Saving…';
+            msg.className   = '';
+            try {
+                const res = await fetch('/api/config', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ user_profile: { vision_profile: key } }),
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'saved') {
+                    markSelected(key);
+                    _currentProfile = key;
+                    msg.textContent = '✓ Profile updated — redirecting…';
+                    setTimeout(() => {
+                        window.location.href = '/interface/html/index.html';
+                    }, 900);
+                } else {
+                    msg.textContent = '✗ ' + (data.error || 'Save failed');
+                    msg.className   = 'err';
+                }
+            } catch (e) {
+                msg.textContent = '✗ Network error — is the server running?';
+                msg.className   = 'err';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadCurrentProfile);
+    </script>
+</body>
+
+</html>

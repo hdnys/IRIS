@@ -50,23 +50,27 @@ h3 {
     letter-spacing: 1px;
 }
 
+/* ── Main content row ──────────────────────────────────────── */
 .container {
     display: flex;
     flex-direction: row;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: center;
     max-width: 1200px;
     margin: 0 auto;
     text-align: center;
-    gap: 50px;
+    gap: 30px;
+    flex-wrap: wrap;
 }
 
 .category {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
+    gap: 8px;
 }
 
+/* ── Friend / profile cards ────────────────────────────────── */
 .card {
     padding: 0;
     width: 200px;
@@ -84,6 +88,26 @@ h3 {
     margin: 8px 0;
 }
 
+/* Clickable card (visual deficiency) */
+.clickable-card {
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.clickable-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 10px 28px rgba(0, 189, 198, 0.35);
+}
+
+.change-hint {
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    color: rgba(0, 189, 198, 0.85);
+    margin-top: auto !important;
+    padding-bottom: 14px;
+}
+
+/* ── Buttons ───────────────────────────────────────────────── */
 .headerbtn {
     padding: 10px 20px;
     margin: 5px;
@@ -116,6 +140,28 @@ button:disabled {
     cursor: not-allowed;
 }
 
+/* Add-to-entourage "+" button */
+.add-btn {
+    background: rgba(0, 189, 198, 0.15);
+    color: #00BDC6;
+    border: 1px solid rgba(0, 189, 198, 0.5) !important;
+    border-radius: 50px;
+    padding: 8px 22px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-top: 4px;
+}
+
+.add-btn:hover {
+    background: rgba(0, 189, 198, 0.3) !important;
+    color: #fff;
+    border: 1px solid rgba(0, 189, 198, 0.7) !important;
+}
+
+/* ── Camera canvas ─────────────────────────────────────────── */
 #video {
     width: 100%;
     max-width: 500px;
@@ -123,13 +169,50 @@ button:disabled {
     margin: 10px 0;
 }
 
+/* ── Friends grid (index sidebar — compact 2-col) ──────────── */
 .grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    /* 3 colonnes égales */
-    gap: 20px;
-    /* espace entre les cards */
+    grid-template-columns: repeat(2, 90px);
+    gap: 8px;
 }
+
+.friend-mini {
+    width: 90px;
+    height: 90px;
+    background: radial-gradient(circle, rgba(217, 217, 217, 1) 0%, rgba(255, 255, 255, 1) 50%);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    color: #233C5D;
+    gap: 4px;
+}
+
+.friend-mini img {
+    width: 100%;
+    height: 60px;
+    object-fit: cover;
+}
+
+.friend-mini .initial {
+    font-size: 22px;
+    font-weight: 700;
+    color: #233C5D;
+}
+
+.see-all {
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    text-decoration: none;
+    margin-top: 2px;
+}
+
+.see-all:hover { color: #00BDC6; }
 
 .photo {
     width: 50px;
@@ -138,6 +221,7 @@ button:disabled {
     margin-bottom: 10px;
 }
 
+/* ── Status / pool viewer ──────────────────────────────────── */
 .status {
     padding: 10px;
     background: #222;
@@ -153,4 +237,100 @@ button:disabled {
     overflow-y: auto;
     font-family: monospace;
     font-size: 12px;
+}
+
+/* ── Learn-face modal ──────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-box {
+    background: radial-gradient(circle, rgba(35, 60, 93, 1) 0%, rgba(15, 35, 65, 1) 100%);
+    border: 1px solid rgba(0, 189, 198, 0.4);
+    border-radius: 16px;
+    padding: 36px 40px;
+    max-width: 400px;
+    width: 90%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    text-align: center;
+}
+
+.modal-title {
+    font-family: 'Instrument Serif';
+    font-size: 26px;
+    color: #fff;
+}
+
+.modal-desc {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.55);
+    margin: 0;
+    line-height: 1.5;
+}
+
+.modal-input {
+    background: rgba(0, 189, 198, 0.1);
+    border: 1px solid rgba(0, 189, 198, 0.4) !important;
+    color: #fff;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 16px;
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    text-align: center;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+}
+
+.modal-input:focus { border-color: #00BDC6 !important; }
+
+.modal-status {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    color: #00BDC6;
+    min-height: 18px;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.modal-btn-start {
+    background: #00BDC6;
+    color: #0a1f35;
+    border: none !important;
+    border-radius: 50px;
+    padding: 12px 32px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.modal-btn-start:hover {
+    background: #00a8b0 !important;
+    border: none !important;
+}
+
+.modal-btn-cancel {
+    background: transparent;
+    color: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.25) !important;
+    border-radius: 50px;
+    padding: 12px 24px;
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    cursor: pointer;
 }
