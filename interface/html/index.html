@@ -37,7 +37,10 @@
         </div>
 
         <!-- Camera feed — dimensions set dynamically to match the server frame -->
-        <canvas id="video"></canvas>
+        <div class="video-wrap">
+            <canvas id="video"></canvas>
+            <button class="fullscreen-btn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+        </div>
 
         <!-- Entourage -->
         <div class="category">
@@ -209,6 +212,16 @@
                 grid.appendChild(addSlot);
             } catch (e) {
                 console.error('Error loading friends:', e);
+            }
+        }
+
+        /* ── Fullscreen ──────────────────────────────────────── */
+        function toggleFullscreen() {
+            const wrap = document.querySelector('.video-wrap');
+            if (!document.fullscreenElement) {
+                (wrap.requestFullscreen || wrap.webkitRequestFullscreen).call(wrap);
+            } else {
+                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
             }
         }
 
