@@ -36,8 +36,8 @@
             </div>
         </div>
 
-        <!-- Camera feed -->
-        <canvas id="video" width="640" height="480"></canvas>
+        <!-- Camera feed — dimensions set dynamically to match the server frame -->
+        <canvas id="video"></canvas>
 
         <!-- Entourage -->
         <div class="category">
@@ -131,7 +131,17 @@
                 const blob = new Blob([event.data]);
                 const url  = URL.createObjectURL(blob);
                 const img  = new Image();
-                img.onload = () => { ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
+                img.onload = () => {
+                    // Match canvas resolution to the actual frame so the full
+                    // field of view is always shown without cropping.
+                    if (canvas.width  !== img.naturalWidth ||
+                        canvas.height !== img.naturalHeight) {
+                        canvas.width  = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
+                    }
+                    ctx.drawImage(img, 0, 0);
+                    URL.revokeObjectURL(url);
+                };
                 img.onerror = () => URL.revokeObjectURL(url);
                 img.src = url;
             };
