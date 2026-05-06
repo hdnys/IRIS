@@ -4,21 +4,243 @@
 <head>
     <title>IRIS - Settings</title>
     <link rel="stylesheet" href="/interface/css/closedones.css">
-    <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css?family=Instrument+Serif' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
+    <style>
+        /* ── Settings-specific styles ───────────────────────────────────── */
+        body { color: #fff; }
+
+        .settings-wrapper {
+            max-width: 860px;
+            margin: 24px auto 60px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            padding: 0 16px;
+        }
+
+        .restart-banner {
+            display: none;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            color: rgba(255, 210, 80, 0.95);
+            background: rgba(255, 200, 60, 0.08);
+            border: 1px solid rgba(255, 200, 60, 0.35);
+            border-radius: 8px;
+            padding: 10px 18px;
+            text-align: center;
+        }
+
+        .settings-card {
+            background: rgba(0, 20, 50, 0.55);
+            border: 1px solid rgba(0, 189, 198, 0.25);
+            border-radius: 14px;
+            padding: 22px 28px;
+        }
+
+        .card-title {
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            letter-spacing: 2.5px;
+            color: #00BDC6;
+            text-transform: uppercase;
+            margin: 0 0 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(0, 189, 198, 0.15);
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 13px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .setting-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+        .setting-label { flex: 1; min-width: 200px; }
+
+        .setting-name {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            color: #fff;
+            margin-bottom: 3px;
+        }
+
+        .setting-desc {
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.45);
+            line-height: 1.5;
+        }
+
+        .setting-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Select */
+        select {
+            background: rgba(0, 189, 198, 0.12);
+            border: 1px solid rgba(0, 189, 198, 0.45);
+            color: #fff;
+            border-radius: 7px;
+            padding: 8px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            cursor: pointer;
+            min-width: 200px;
+            outline: none;
+        }
+
+        select option { background: #1a3050; color: #fff; }
+
+        /* Text / number inputs */
+        .ctrl-input {
+            background: rgba(0, 189, 198, 0.08);
+            border: 1px solid rgba(0, 189, 198, 0.35);
+            color: #fff;
+            border-radius: 7px;
+            padding: 8px 12px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            min-width: 200px;
+            outline: none;
+        }
+
+        .ctrl-input:focus { border-color: #00BDC6; }
+
+        /* Range slider */
+        .slider-wrap { display: flex; align-items: center; gap: 10px; }
+
+        .slider-wrap input[type=range] {
+            -webkit-appearance: none;
+            width: 160px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.18);
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .slider-wrap input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #00BDC6;
+            cursor: pointer;
+            box-shadow: 0 0 4px rgba(0, 189, 198, 0.5);
+        }
+
+        .slider-val {
+            font-family: 'Inter', monospace;
+            font-size: 13px;
+            color: #00BDC6;
+            min-width: 42px;
+            text-align: right;
+        }
+
+        /* Toggle switch */
+        .toggle {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+            cursor: pointer;
+        }
+
+        .toggle input { opacity: 0; width: 0; height: 0; }
+
+        .toggle-track {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 24px;
+            transition: background 0.2s;
+        }
+
+        .toggle-thumb {
+            position: absolute;
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+
+        .toggle input:checked ~ .toggle-track { background: #00BDC6; }
+        .toggle input:checked ~ .toggle-thumb { transform: translateX(20px); }
+
+        /* Collapsible advanced section */
+        details.adv { margin-top: 4px; }
+
+        details.adv > summary {
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            color: rgba(0, 189, 198, 0.7);
+            cursor: pointer;
+            padding: 10px 0 4px;
+            list-style: none;
+            user-select: none;
+        }
+
+        details.adv > summary::before { content: "▶  "; font-size: 9px; }
+        details.adv[open] > summary::before { content: "▼  "; }
+
+        /* Save bar */
+        .save-bar {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 0 20px;
+        }
+
+        .save-btn {
+            background: #00BDC6;
+            color: #0a1f35;
+            border: none;
+            border-radius: 50px;
+            padding: 14px 56px;
+            font-family: 'Inter', sans-serif;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: opacity 0.15s, transform 0.1s;
+        }
+
+        .save-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+        .save-btn:active { transform: translateY(0); }
+        .save-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+        #saveMsg {
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            color: #00BDC6;
+            min-height: 18px;
+            text-align: center;
+        }
+
+        #saveMsg.err { color: #ff7070; }
+    </style>
 </head>
 
 <body>
     <div class="header">
-        <button id="closedonesBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/index.html'">HOME</button>
-        <button id="settingsBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
-        <button id="aboutBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
-        <button id="contactBtn" class="headerbtn"
-            onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
-
+        <button class="headerbtn" onclick="window.location.href='/interface/html/index.html'">HOME</button>
+        <button class="headerbtn" onclick="window.location.href='/interface/html/settings.html'">SETTINGS</button>
+        <button class="headerbtn" onclick="window.location.href='/interface/html/about.html'">ABOUT</button>
+        <button class="headerbtn" onclick="window.location.href='/interface/html/contact.html'">CONTACT</button>
     </div>
 
     <div class="title">
@@ -26,6 +248,563 @@
         <p class="h2" id="h2">INTELLIGENT RESOURCE FOR SHORT-SIGHTED INDIVIDUAL</p>
     </div>
 
-    <div class="container">
+    <div class="settings-wrapper">
 
-    </div>
+        <div class="restart-banner" id="restartBanner">
+            ⚠ &nbsp;Settings saved — restart the pipeline on the home page to apply changes.
+        </div>
+
+        <!-- ── YOUR PROFILE ──────────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">Your Profile</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Vision Profile</div>
+                    <div class="setting-desc">Your visual condition — shapes how scene descriptions are written</div>
+                </div>
+                <div class="setting-control">
+                    <select id="vision_profile">
+                        <option value="total_blindness">Total Blindness</option>
+                        <option value="low_vision">Low Vision</option>
+                        <option value="tunnel_vision">Tunnel Vision</option>
+                        <option value="color_blindness">Color Blindness</option>
+                        <option value="peripheral_loss">Peripheral Loss</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Description Length</div>
+                    <div class="setting-desc">How much detail the narrator includes per scene description</div>
+                </div>
+                <div class="setting-control">
+                    <select id="verbosity">
+                        <option value="brief">Brief — key facts only</option>
+                        <option value="standard">Standard — balanced</option>
+                        <option value="detailed">Detailed — full coverage</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Preferred Language</div>
+                    <div class="setting-desc">Language tag for spoken output (e.g. en-US, fr-FR, ar-SA)</div>
+                </div>
+                <div class="setting-control">
+                    <input class="ctrl-input" type="text" id="language" placeholder="en-US">
+                </div>
+            </div>
+        </div>
+
+        <!-- ── PIPELINE BEHAVIOR ──────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">Pipeline Behavior</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Re-description Cooldown</div>
+                    <div class="setting-desc">Minimum seconds between two scene descriptions — prevents rapid repetition</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="cooldown" min="2" max="60" step="1" value="10"
+                               oninput="sv('cooldown_v', this.value + 's')">
+                        <span class="slider-val" id="cooldown_v">10s</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Show Face Markers to AI</div>
+                    <div class="setting-desc">Overlay face boxes on the image sent to the vision model — helps it reference people accurately</div>
+                </div>
+                <div class="setting-control">
+                    <label class="toggle">
+                        <input type="checkbox" id="annotate_faces" checked>
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Show Object Markers to AI</div>
+                    <div class="setting-desc">Overlay YOLO detection boxes on the image sent to the vision model — helps it name objects</div>
+                </div>
+                <div class="setting-control">
+                    <label class="toggle">
+                        <input type="checkbox" id="annotate_objects" checked>
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Parallel Workers</div>
+                    <div class="setting-desc">Number of threads used for simultaneous AI tasks — more workers use more CPU/GPU</div>
+                </div>
+                <div class="setting-control">
+                    <input class="ctrl-input" type="number" id="max_workers" min="1" max="16" step="1" value="4" style="min-width:100px">
+                </div>
+            </div>
+        </div>
+
+        <!-- ── SCENE DETECTION ───────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">Scene Detection</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Detection Threshold</div>
+                    <div class="setting-desc">How much the scene must change to trigger a new description — lower value means more sensitive</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="trigger_score" min="0.10" max="1.00" step="0.05" value="0.40"
+                               oninput="sv('trigger_score_v', fmt2(this.value))">
+                        <span class="slider-val" id="trigger_score_v">0.40</span>
+                    </div>
+                </div>
+            </div>
+
+            <details class="adv">
+                <summary>Signal Weights — Advanced</summary>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Pixel Change</div>
+                        <div class="setting-desc">Weight for raw pixel differences between frames</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_dhash" min="0" max="0.50" step="0.01" value="0.30"
+                                   oninput="sv('w_dhash_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_dhash_v">0.30</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Person Count Change</div>
+                        <div class="setting-desc">Weight for a change in the number of people (YOLO headcount)</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_person_count" min="0" max="0.50" step="0.01" value="0.20"
+                                   oninput="sv('w_person_count_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_person_count_v">0.20</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Face Count Change</div>
+                        <div class="setting-desc">Weight for a change in the number of detected faces</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_face_count" min="0" max="0.50" step="0.01" value="0.15"
+                                   oninput="sv('w_face_count_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_face_count_v">0.15</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Identity Change</div>
+                        <div class="setting-desc">Weight for a change in which people are recognized</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_identity" min="0" max="0.50" step="0.01" value="0.20"
+                                   oninput="sv('w_identity_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_identity_v">0.20</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Semantic Change</div>
+                        <div class="setting-desc">Weight for a shift in the overall meaning of the scene (AI embedding)</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_embedding" min="0" max="0.50" step="0.01" value="0.20"
+                                   oninput="sv('w_embedding_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_embedding_v">0.20</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Object Set Change</div>
+                        <div class="setting-desc">Weight for a change in which types of objects are visible</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_objects" min="0" max="0.50" step="0.01" value="0.15"
+                                   oninput="sv('w_objects_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_objects_v">0.15</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <div class="setting-label">
+                        <div class="setting-name">Motion</div>
+                        <div class="setting-desc">Weight for movement detected by optical flow</div>
+                    </div>
+                    <div class="setting-control">
+                        <div class="slider-wrap">
+                            <input type="range" id="w_flow" min="0" max="0.50" step="0.01" value="0.10"
+                                   oninput="sv('w_flow_v', fmt2(this.value))">
+                            <span class="slider-val" id="w_flow_v">0.10</span>
+                        </div>
+                    </div>
+                </div>
+
+            </details>
+        </div>
+
+        <!-- ── AI MODELS ─────────────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">AI Models</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Vision Model</div>
+                    <div class="setting-desc">Ollama model used to analyze the camera image and produce a scene outline</div>
+                </div>
+                <div class="setting-control">
+                    <input class="ctrl-input" type="text" id="vlm_model" placeholder="llava-phi3">
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Narrator Model</div>
+                    <div class="setting-desc">Ollama model that converts the scene outline into natural spoken language</div>
+                </div>
+                <div class="setting-control">
+                    <input class="ctrl-input" type="text" id="vlm_narrator" placeholder="llama3.2">
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Ollama Server URL</div>
+                    <div class="setting-desc">Address of the Ollama API server running locally or on your network</div>
+                </div>
+                <div class="setting-control">
+                    <input class="ctrl-input" type="text" id="vlm_host" placeholder="http://127.0.0.1:11434">
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Creativity (Temperature)</div>
+                    <div class="setting-desc">How varied the narrator's wording is — lower is more consistent, higher is more expressive</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="vlm_temp" min="0.0" max="1.0" step="0.05" value="0.30"
+                               oninput="sv('vlm_temp_v', fmt2(this.value))">
+                        <span class="slider-val" id="vlm_temp_v">0.30</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Image Resolution</div>
+                    <div class="setting-desc">Maximum pixel dimension sent to the vision model — larger means more detail but slower analysis</div>
+                </div>
+                <div class="setting-control">
+                    <select id="vlm_imgsize">
+                        <option value="256">256 px — fastest</option>
+                        <option value="384">384 px</option>
+                        <option value="512">512 px — recommended</option>
+                        <option value="640">640 px</option>
+                        <option value="768">768 px</option>
+                        <option value="1024">1024 px — highest detail</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Context Window</div>
+                    <div class="setting-desc">Maximum token capacity for both models — increase if descriptions are cut off</div>
+                </div>
+                <div class="setting-control">
+                    <select id="vlm_ctx">
+                        <option value="512">512</option>
+                        <option value="1024">1024</option>
+                        <option value="2048">2048 — default</option>
+                        <option value="4096">4096</option>
+                        <option value="8192">8192</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── OBJECT DETECTION ──────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">Object Detection</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Confidence Threshold</div>
+                    <div class="setting-desc">How certain the model must be before reporting an object — raise to reduce false positives</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="od_conf" min="0.10" max="0.90" step="0.05" value="0.25"
+                               oninput="sv('od_conf_v', fmt2(this.value))">
+                        <span class="slider-val" id="od_conf_v">0.25</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Overlap Threshold (IoU)</div>
+                    <div class="setting-desc">How much two detection boxes can overlap before one is removed — lower reduces duplicates</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="od_iou" min="0.10" max="0.90" step="0.05" value="0.45"
+                               oninput="sv('od_iou_v', fmt2(this.value))">
+                        <span class="slider-val" id="od_iou_v">0.45</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── FACE RECOGNITION ──────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">Face Recognition</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Recognition Strictness</div>
+                    <div class="setting-desc">How closely a face must match a registered person — lower means stricter, fewer false identifications</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="fr_cos" min="0.10" max="0.90" step="0.01" value="0.38"
+                               oninput="sv('fr_cos_v', fmt2(this.value))">
+                        <span class="slider-val" id="fr_cos_v">0.38</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Face Detection Confidence</div>
+                    <div class="setting-desc">Minimum confidence for a face to be detected at all — raise to ignore blurry or partial faces</div>
+                </div>
+                <div class="setting-control">
+                    <div class="slider-wrap">
+                        <input type="range" id="fr_det" min="0.10" max="0.95" step="0.05" value="0.60"
+                               oninput="sv('fr_det_v', fmt2(this.value))">
+                        <span class="slider-val" id="fr_det_v">0.60</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── SAVE ───────────────────────────────────────────────────────── -->
+        <div class="save-bar">
+            <button class="save-btn" onclick="saveSettings()">Save Settings</button>
+            <span id="saveMsg"></span>
+        </div>
+
+    </div><!-- .settings-wrapper -->
+
+    <script>
+        /* ── Helpers ──────────────────────────────────────────────────── */
+        const fmt2 = v => parseFloat(v).toFixed(2);
+        const sv   = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+        function setField(id, value) {
+            if (value === undefined || value === null) return;
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.type === 'checkbox') {
+                el.checked = !!value;
+            } else {
+                el.value = value;
+                if (el.type === 'range') {
+                    const span = document.getElementById(id + '_v');
+                    if (span) span.textContent = id === 'cooldown'
+                        ? Math.round(value) + 's'
+                        : fmt2(value);
+                }
+            }
+        }
+
+        const getFloat  = id => parseFloat(document.getElementById(id)?.value);
+        const getInt    = id => parseInt(document.getElementById(id)?.value);
+        const getString = id => (document.getElementById(id)?.value ?? '').trim();
+        const getBool   = id => document.getElementById(id)?.checked ?? false;
+
+        /* ── Load config → populate form ─────────────────────────────── */
+        async function loadConfig() {
+            const msg = document.getElementById('saveMsg');
+            try {
+                const res = await fetch('/api/config');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const cfg = await res.json();
+                msg.textContent = '';
+                msg.className   = '';
+
+                const p   = cfg.user_profile || {};
+                const pl  = cfg.pipeline     || {};
+                const sg  = cfg.scene_gate   || {};
+                const w   = sg.weights        || {};
+                const vlm = cfg.adapters?.vlm?.params              || {};
+                const od  = cfg.adapters?.object_detection?.params || {};
+                const fr  = cfg.adapters?.face_recognition?.params || {};
+
+                // Profile
+                setField('vision_profile', p.vision_profile);
+                setField('verbosity',      p.verbosity);
+                setField('language',       p.preferred_language);
+
+                // Pipeline
+                setField('cooldown',         pl.infer_cooldown_s);
+                setField('annotate_faces',   pl.annotate_vlm_faces);
+                setField('annotate_objects', pl.annotate_vlm_objects);
+                setField('max_workers',      pl.max_workers);
+
+                // Scene gate
+                setField('trigger_score',  sg.trigger_score);
+                setField('w_dhash',        w.dhash);
+                setField('w_face_count',   w.face_count);
+                setField('w_person_count', w.person_count);
+                setField('w_identity',     w.identity);
+                setField('w_objects',      w.objects);
+                setField('w_flow',         w.flow);
+                setField('w_embedding',    w.embedding);
+
+                // VLM
+                setField('vlm_model',    vlm.model);
+                setField('vlm_narrator', vlm.model_describe);
+                setField('vlm_host',     vlm.host);
+                setField('vlm_temp',     vlm.temperature);
+                setField('vlm_imgsize',  vlm.max_image_side);
+                setField('vlm_ctx',      vlm.num_ctx);
+
+                // Object detection
+                setField('od_conf', od.conf_threshold);
+                setField('od_iou',  od.iou_threshold);
+
+                // Face recognition
+                setField('fr_cos', fr.cos_threshold);
+                setField('fr_det', fr.det_confidence);
+
+            } catch (e) {
+                const msg = document.getElementById('saveMsg');
+                msg.textContent = '⚠ Could not load settings — restart the server and refresh this page.';
+                msg.className   = 'err';
+            }
+        }
+
+        /* ── Collect form → POST /api/config ─────────────────────────── */
+        async function saveSettings() {
+            const payload = {
+                user_profile: {
+                    vision_profile:     getString('vision_profile'),
+                    verbosity:          getString('verbosity'),
+                    preferred_language: getString('language'),
+                },
+                pipeline: {
+                    infer_cooldown_s:     getFloat('cooldown'),
+                    annotate_vlm_faces:   getBool('annotate_faces'),
+                    annotate_vlm_objects: getBool('annotate_objects'),
+                    max_workers:          getInt('max_workers'),
+                },
+                scene_gate: {
+                    trigger_score: getFloat('trigger_score'),
+                    weights: {
+                        dhash:        getFloat('w_dhash'),
+                        face_count:   getFloat('w_face_count'),
+                        person_count: getFloat('w_person_count'),
+                        identity:     getFloat('w_identity'),
+                        objects:      getFloat('w_objects'),
+                        flow:         getFloat('w_flow'),
+                        embedding:    getFloat('w_embedding'),
+                    },
+                },
+                adapters: {
+                    vlm: {
+                        params: {
+                            model:          getString('vlm_model'),
+                            model_describe: getString('vlm_narrator'),
+                            host:           getString('vlm_host'),
+                            temperature:    getFloat('vlm_temp'),
+                            max_image_side: getInt('vlm_imgsize'),
+                            num_ctx:        getInt('vlm_ctx'),
+                        },
+                    },
+                    object_detection: {
+                        params: {
+                            conf_threshold: getFloat('od_conf'),
+                            iou_threshold:  getFloat('od_iou'),
+                        },
+                    },
+                    face_recognition: {
+                        params: {
+                            cos_threshold:  getFloat('fr_cos'),
+                            det_confidence: getFloat('fr_det'),
+                        },
+                    },
+                },
+            };
+
+            const btn = document.querySelector('.save-btn');
+            const msg = document.getElementById('saveMsg');
+            btn.disabled    = true;
+            msg.textContent = '';
+            msg.className   = '';
+
+            try {
+                const res  = await fetch('/api/config', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'saved') {
+                    msg.textContent = '✓ Saved — restart the pipeline on the home page to apply.';
+                    document.getElementById('restartBanner').style.display = 'block';
+                } else {
+                    msg.textContent = '✗ ' + (data.error || 'Save failed');
+                    msg.className   = 'err';
+                }
+            } catch (e) {
+                msg.textContent = '✗ Network error — is the server running?';
+                msg.className   = 'err';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadConfig);
+    </script>
+</body>
+
+</html>
