@@ -42,6 +42,7 @@ pipeline:
   infer_cooldown_s: 9
   annotate_vlm_faces: true
   annotate_vlm_objects: true
+  camera_index: 1
 scene_gate:
   trigger_score: 0.55
   weights:
