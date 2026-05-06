@@ -48,14 +48,14 @@ pipeline:
 # signals are normalized to [0, 1] and combined via the weights below;
 # inference fires when the combined score >= trigger_score.
 scene_gate:
-  trigger_score: 0.4
+  trigger_score: 0.56
   weights:
     dhash:        0.30   # pixel-level change (dHash hamming)
     face_count:   0.15   # any change in number of faces detected (YuNet)
     identity:     0.20   # set of recognized people changed
     flow:         0.10   # instantaneous optical-flow motion
     embedding:    0.20   # MobileNet logits cosine distance (semantic)
-    objects:      0.15   # YOLO label-set changed vs committed frame
+    objects:      0.10   # YOLO label-set changed vs committed frame
     person_count: 0.20   # YOLO person count changed (authoritative headcount)
   thresholds:
     # Per-signal "max" values — used to normalize each raw signal to [0, 1]
