@@ -165,7 +165,7 @@ button:disabled {
 .video-wrap {
     position: relative;
     display: inline-block;
-    max-width: 960px;
+    max-width: 720px;
     width: 100%;
 }
 
