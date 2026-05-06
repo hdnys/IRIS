@@ -232,6 +232,23 @@
         }
 
         #saveMsg.err { color: #ff7070; }
+
+        .refresh-cam-btn {
+            background: rgba(0, 189, 198, 0.12);
+            border: 1px solid rgba(0, 189, 198, 0.45) !important;
+            color: #00BDC6;
+            border-radius: 7px;
+            padding: 8px 12px;
+            font-size: 15px;
+            cursor: pointer;
+            line-height: 1;
+            min-width: unset;
+        }
+
+        .refresh-cam-btn:hover {
+            background: rgba(0, 189, 198, 0.25) !important;
+            color: #fff;
+        }
     </style>
 </head>
 
@@ -295,6 +312,24 @@
                 </div>
                 <div class="setting-control">
                     <input class="ctrl-input" type="text" id="language" placeholder="en-US">
+                </div>
+            </div>
+        </div>
+
+        <!-- ── CAMERA ────────────────────────────────────────────────────── -->
+        <div class="settings-card">
+            <div class="card-title">Camera</div>
+
+            <div class="setting-row">
+                <div class="setting-label">
+                    <div class="setting-name">Camera Device</div>
+                    <div class="setting-desc">Input camera used for the live video feed — click ↻ to refresh the list</div>
+                </div>
+                <div class="setting-control">
+                    <select id="camera_index">
+                        <option value="0">Camera 0 (default)</option>
+                    </select>
+                    <button class="refresh-cam-btn" onclick="loadCameras()" title="Refresh camera list">↻</button>
                 </div>
             </div>
         </div>
@@ -635,6 +670,33 @@
     </div><!-- .settings-wrapper -->
 
     <script>
+        /* ── Camera list ──────────────────────────────────────────────── */
+        async function loadCameras(selectValue) {
+            const sel = document.getElementById('camera_index');
+            const prev = selectValue ?? sel.value;
+            sel.innerHTML = '<option>Loading…</option>';
+            sel.disabled = true;
+            try {
+                const res  = await fetch('/api/cameras');
+                const data = await res.json();
+                sel.innerHTML = '';
+                const cameras = data.cameras && data.cameras.length
+                    ? data.cameras
+                    : [{ index: 0, label: 'Camera 0 (default)' }];
+                cameras.forEach(cam => {
+                    const opt = document.createElement('option');
+                    opt.value = cam.index;
+                    opt.textContent = cam.label;
+                    sel.appendChild(opt);
+                });
+                sel.value = prev;
+            } catch (e) {
+                sel.innerHTML = '<option value="0">Camera 0 (default)</option>';
+            } finally {
+                sel.disabled = false;
+            }
+        }
+
         /* ── Helpers ──────────────────────────────────────────────────── */
         const fmt2 = v => parseFloat(v).toFixed(2);
         const sv   = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
@@ -684,7 +746,8 @@
                 setField('verbosity',      p.verbosity);
                 setField('language',       p.preferred_language);
 
-                // Pipeline
+                // Camera + Pipeline
+                await loadCameras(pl.camera_index ?? 0);
                 setField('cooldown',         pl.infer_cooldown_s);
                 setField('annotate_faces',   pl.annotate_vlm_faces);
                 setField('annotate_objects', pl.annotate_vlm_objects);
@@ -732,6 +795,7 @@
                     preferred_language: getString('language'),
                 },
                 pipeline: {
+                    camera_index:         getInt('camera_index'),
                     infer_cooldown_s:     getFloat('cooldown'),
                     annotate_vlm_faces:   getBool('annotate_faces'),
                     annotate_vlm_objects: getBool('annotate_objects'),

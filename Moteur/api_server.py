@@ -5,6 +5,7 @@ Endpoints
 GET  /                  — serve index.html
 GET  /api/status        — running state + pool snapshot
 GET  /api/profiles      — available vision profiles
+GET  /api/cameras       — probe and return available camera indices
 GET  /api/friends       — registered people in data/
 POST /api/start         — start the pipeline (returns immediately; init runs in thread)
 POST /api/stop          — stop the pipeline
@@ -410,6 +411,24 @@ async def get_friends():
     return {"friends": friends, "count": len(friends)}
 
 
+@app.get("/api/cameras")
+async def list_cameras():
+    """Probe camera indices 0–4 and return the ones OpenCV can open."""
+    import asyncio
+
+    def _probe() -> list[dict]:
+        found = []
+        for i in range(5):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                found.append({"index": i, "label": f"Camera {i}"})
+                cap.release()
+        return found
+
+    cameras = await asyncio.get_event_loop().run_in_executor(None, _probe)
+    return {"cameras": cameras}
+
+
 @app.post("/api/start")
 async def start_pipeline():
     global _runner
@@ -419,7 +438,8 @@ async def start_pipeline():
         try:
             with open(CONFIG_PATH) as f:
                 cfg = yaml.safe_load(f)
-            r = PipelineRunner(cfg)
+            camera_index = (cfg.get("pipeline") or {}).get("camera_index", 0)
+            r = PipelineRunner(cfg, camera_index=camera_index)
             r.start()
             _runner = r
         except Exception as e:
