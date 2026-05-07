@@ -6,6 +6,57 @@
     <link rel="stylesheet" href="/interface/css/style.css">
     <link href='https://fonts.googleapis.com/css?family=Instrument Serif' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
+    <style>
+        .content-section {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 20px;
+            line-height: 1.8;
+        }
+        .content-section p {
+            margin-bottom: 20px;
+            color: #e0e0e0;
+            font-size: 16px;
+        }
+        .content-section h2 {
+            color: #00BDC6;
+            margin: 30px 0 15px;
+            font-size: 24px;
+        }
+        .content-section ul {
+            margin-left: 30px;
+            margin-bottom: 20px;
+            color: #e0e0e0;
+        }
+        .content-section li {
+            margin-bottom: 10px;
+        }
+
+      .team-section {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .team-members {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+        }
+
+        .team-member {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .team-member img {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            border: 5px solid #FFFFFF;
+            object-fit: cover;
+        }
+    </style>
 </head>
 
 <body>
@@ -27,5 +78,102 @@
     </div>
 
     <div class="container">
+        <div class="team-section">
+            <h2>Meet the Team</h2>
+            <div class="team-members">
+                <div class="team-member">
+                    <img src="/interface/ressources/ashley.jpg" alt="Team Member 1">
+                    <p>Ashley - Lead Developer</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/elie.jpeg" alt="Team Member 2">
+                    <p>Elie - Computer Vision Specialist</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/liam.jpeg" alt="Team Member 3">
+                    <p>Liam - UX Designer</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/mohamad.jpeg" alt="Team Member 3">
+                    <p>Mohamad - UX Designer</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/nouraldin.jpeg" alt="Team Member 3">
+                    <p>Nouraldin - UX Designer</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/rida.jpg" alt="Team Member 3">
+                    <p>Rida - UX Designer</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/rime.jpg" alt="Team Member 3">
+                    <p>Rime - UX Designer</p>
+                </div>
+                <div class="team-member">
+                    <img src="/interface/ressources/ysaline.jpeg" alt="Team Member 3">
+                    <p>Ysaline - UX Designer</p>
+                </div>
+            </div>
+        </div>
+        <div class="content-section">
+            <h2>What is IRIS?</h2>
+            <p>
+                IRIS is an Intelligent Resource for Short-Sighted Individuals. 
+                It's an advanced computer vision system designed to assist people with visual deficiencies 
+                by providing real-time scene understanding and object detection capabilities.
+            </p>
 
+            <h2>Our Mission</h2>
+            <p>
+                Our mission is to empower individuals with visual impairments by providing 
+                accessible technology that enhances their awareness of their surroundings and 
+                helps them navigate the world with greater independence and confidence.
+            </p>
+
+            <h2>Key Features</h2>
+            <ul>
+                <li><strong>Real-time Scene Understanding:</strong> Advanced computer vision analyzes your surroundings in real-time</li>
+                <li><strong>Object Detection:</strong> Identifies and describes objects, people, and obstacles around you</li>
+                <li><strong>Face Recognition:</strong> Recognizes people from your entourage and identifies them by name</li>
+                <li><strong>Voice Control:</strong> Control the system entirely through voice commands in French or English</li>
+                <li><strong>Visual Profile Adaptation:</strong> Customizable settings for different types of visual deficiencies</li>
+                <li><strong>Personalized Entourage:</strong> Learn and recognize people important to you</li>
+            </ul>
+
+            <h2>Voice Commands</h2>
+            <p>
+                IRIS features a comprehensive voice control system that allows you to operate the interface 
+                without visual interaction. You can:
+            </p>
+            <ul>
+                <li>Start and stop the pipeline with voice commands</li>
+                <li>Add new people to your entourage</li>
+                <li>Access settings and preferences</li>
+                <li>Modify your visual deficiency profile</li>
+                <li>Request audio descriptions of pages and content</li>
+            </ul>
+
+            <h2>Technology Stack</h2>
+            <p>
+                IRIS is built using state-of-the-art deep learning models and computer vision techniques:
+            </p>
+            <ul>
+                <li>YOLOv8 for real-time object detection</li>
+                <li>SFace for advanced face recognition</li>
+                <li>MobileNetV2 for image classification</li>
+                <li>Web Speech API for voice control</li>
+                <li>FastAPI backend for high-performance processing</li>
+            </ul>
+
+            <h2>Privacy & Security</h2>
+            <p>
+                Your privacy is important to us. All face recognition data is stored locally 
+                on your device or server. No data is sent to external servers without your consent.
+            </p>
+        </div>
     </div>
+
+    <script src="/interface/js/voice-commands.js"></script>
+</body>
+
+</html>

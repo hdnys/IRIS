@@ -60,7 +60,7 @@ scene_gate:
   mobilenet_path: models/image_classification_mobilenetv2_2022apr.onnx
   download_if_missing: true
 user_profile:
-  vision_profile: tunnel_vision
+  vision_profile: color_blindness
   preferred_language: en-US
   verbosity: detailed
   known_people: []

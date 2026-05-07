@@ -6,6 +6,50 @@
     <link rel="stylesheet" href="/interface/css/index.css">
     <link href='https://fonts.googleapis.com/css?family=Instrument+Serif' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css?family=Inter' rel='stylesheet'>
+    <style>
+        /* Voice indicator styles */
+        #voiceIndicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 18px;
+            background: rgba(0, 20, 50, 0.85);
+            border: 2px solid #00BDC6;
+            border-radius: 20px;
+            color: #00BDC6;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 1000;
+            animation: pulse 0.6s ease-in-out infinite;
+            cursor: help;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .voice-help {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 189, 198, 0.1);
+            border: 1px solid rgba(0, 189, 198, 0.5);
+            border-radius: 8px;
+            padding: 12px;
+            color: #00BDC6;
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            max-width: 200px;
+            z-index: 999;
+            display: none;
+        }
+
+        .voice-help.show {
+            display: block;
+        }
+    </style>
 </head>
 
 <body>
@@ -63,6 +107,9 @@
         Status: <span id="status">stopped</span>
     </div>
 
+    <!-- Voice indicator -->
+    <div id="voiceIndicator" title="Statut des commandes vocales">🎤 Initialisation...</div>
+
     <h3 style="max-width:100%; color:#e0e0e0;">Pool State (Real-time)</h3>
     <div class="pool-viewer" id="poolViewer">{…}</div>
 
@@ -111,6 +158,7 @@
                 startBtn.disabled = true;
                 stopBtn.disabled  = false;
                 connectWebSockets();
+                startVoiceControl();
             } else {
                 alert('Error: ' + (data.error || 'Unknown error'));
             }
@@ -124,6 +172,7 @@
                 stopBtn.disabled  = true;
                 if (videoWs) videoWs.close();
                 if (poolWs)  poolWs.close();
+                stopVoiceControl();
             }
         }
 
@@ -331,10 +380,9 @@
                     startBtn.disabled     = true;
                     stopBtn.disabled      = false;
                     connectWebSockets();
+                    startVoiceControl();
                 }
             } catch (e) { /* server not reachable — leave buttons in default state */ }
         });
     </script>
-</body>
-
-</html>
+    <script src="/interface/js/voice-commands.js"></script>
